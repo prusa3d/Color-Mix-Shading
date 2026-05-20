@@ -1,9 +1,9 @@
 import { Grid, OrbitControls } from '@react-three/drei';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { MeshBasicMaterial, OrthographicCamera, PointsMaterial, Vector3 } from 'three';
+import { BufferGeometry, Line, LineBasicMaterial, MeshBasicMaterial, OrthographicCamera, PointsMaterial, Quaternion, Vector3 } from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import type { PaletteMaterial, ParsedMesh, PreviewMesh, PreviewMode } from '../types/mesh';
+import type { PaletteMaterial, ParsedMesh, PreviewMesh, PreviewMode, Vec3 } from '../types/mesh';
 import { createColoredPreviewGeometry, createPointPreviewGeometry } from '../lib/preview/createPreviewGeometry';
 
 type PreviewViewportProps = {
@@ -15,6 +15,7 @@ type PreviewViewportProps = {
   previewMode: PreviewMode;
   orbitEnabled: boolean;
   pointSize: number;
+  lightDirection: Vec3;
 };
 
 const CAMERA_VIEWS = {
@@ -250,6 +251,59 @@ function MeshPreview({
   return <mesh geometry={meshGeometry} material={meshMaterial} />;
 }
 
+function LightDirectionHelper({
+  bounds,
+  lightDirection,
+}: {
+  bounds: MeshBounds | null;
+  lightDirection: Vec3;
+}) {
+  const lightVector = useMemo(() => new Vector3(lightDirection[0], lightDirection[1], lightDirection[2]).normalize(), [lightDirection]);
+  const geometry = useMemo(() => {
+    const center = bounds?.center ?? new Vector3();
+    const distance = (bounds?.maxDimension ?? MIN_VIEW_SIZE) * 0.85 + MIN_VIEW_SIZE * 0.35;
+    const sunPosition = center.clone().addScaledVector(lightVector, distance);
+    return new BufferGeometry().setFromPoints([sunPosition, center]);
+  }, [bounds, lightVector]);
+  const lineMaterial = useMemo(() => new LineBasicMaterial({ color: '#f59e0b', depthTest: false, depthWrite: false }), []);
+  const line = useMemo(() => {
+    const nextLine = new Line(geometry, lineMaterial);
+    nextLine.renderOrder = 10;
+    return nextLine;
+  }, [geometry, lineMaterial]);
+  const sunMaterial = useMemo(() => new MeshBasicMaterial({ color: '#fbbf24', depthTest: false, depthWrite: false }), []);
+  const arrowMaterial = useMemo(() => new MeshBasicMaterial({ color: '#f59e0b', depthTest: false, depthWrite: false }), []);
+  const helperScale = (bounds?.maxDimension ?? MIN_VIEW_SIZE) * 0.035 + MIN_VIEW_SIZE * 0.025;
+  const center = bounds?.center ?? new Vector3();
+  const helperDistance = (bounds?.maxDimension ?? MIN_VIEW_SIZE) * 0.85 + MIN_VIEW_SIZE * 0.35;
+  const sunPosition = center.clone().addScaledVector(lightVector, helperDistance);
+  const arrowDirection = lightVector.clone().multiplyScalar(-1).normalize();
+  const arrowPosition = center.clone().addScaledVector(lightVector, helperDistance * 0.28);
+  const arrowQuaternion = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), arrowDirection);
+
+  useEffect(() => () => {
+    geometry.dispose();
+  }, [geometry]);
+
+  useEffect(() => () => {
+    lineMaterial.dispose();
+    sunMaterial.dispose();
+    arrowMaterial.dispose();
+  }, [arrowMaterial, lineMaterial, sunMaterial]);
+
+  return (
+    <group renderOrder={10}>
+      <primitive object={line} />
+      <mesh position={sunPosition} material={sunMaterial} renderOrder={11}>
+        <sphereGeometry args={[helperScale * 1.4, 24, 16]} />
+      </mesh>
+      <mesh position={arrowPosition} quaternion={arrowQuaternion} material={arrowMaterial} renderOrder={11}>
+        <coneGeometry args={[helperScale, helperScale * 3, 24]} />
+      </mesh>
+    </group>
+  );
+}
+
 export function PreviewViewport({
   originalFaceCount,
   originalMesh,
@@ -259,11 +313,12 @@ export function PreviewViewport({
   previewMode,
   orbitEnabled,
   pointSize,
+  lightDirection,
 }: PreviewViewportProps) {
   const [cameraView, setCameraView] = useState<CameraView>('iso');
   const orbitControls = useRef<OrbitControlsImpl | null>(null);
   const bounds = useMemo(() => computeMeshBounds(originalMesh ?? previewMesh), [originalMesh, previewMesh]);
-  const renderVersion = `${cameraView}-${previewMode}-${pointSize}-${previewMesh?.faceCount ?? 0}-${assignments.length}-${palette.map((item) => item.color).join('|')}`;
+  const renderVersion = `${cameraView}-${previewMode}-${pointSize}-${previewMesh?.faceCount ?? 0}-${assignments.length}-${palette.map((item) => item.color).join('|')}-${lightDirection.join(',')}`;
 
   return (
     <section className="viewport-panel">
@@ -303,6 +358,7 @@ export function PreviewViewport({
               infiniteGrid
             />
             <MeshPreview previewMesh={previewMesh} assignments={assignments} palette={palette} previewMode={previewMode} pointSize={pointSize} />
+            <LightDirectionHelper bounds={bounds} lightDirection={lightDirection} />
             <OrbitControls ref={orbitControls} makeDefault enabled={orbitEnabled} enableDamping={false} />
             <PresetCameraRig bounds={bounds} cameraView={cameraView} orbitControls={orbitControls} />
             <DemandRenderSignal version={renderVersion} />

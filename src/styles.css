@@ -161,6 +161,98 @@ h2 {
   gap: 9px;
 }
 
+.light-direction-control {
+  display: grid;
+  gap: 12px;
+}
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.preset-grid button {
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid #c7d2df;
+  background: #ffffff;
+  color: #334155;
+  font-weight: 800;
+}
+
+.light-dome {
+  position: relative;
+  width: min(230px, 100%);
+  aspect-ratio: 1;
+  margin: 0 auto;
+  border: 1px solid #8fa1b7;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, #ffffff 0 14%, #eef6f5 15% 56%, #dce7ef 57% 100%);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.light-dome::after {
+  content: "";
+  position: absolute;
+  inset: 12%;
+  border: 1px solid rgba(96, 112, 134, 0.38);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.light-dome-axis {
+  position: absolute;
+  display: block;
+  background: rgba(96, 112, 134, 0.34);
+  pointer-events: none;
+}
+
+.light-dome-axis-x {
+  left: 8%;
+  right: 8%;
+  top: 50%;
+  height: 1px;
+}
+
+.light-dome-axis-y {
+  top: 8%;
+  bottom: 8%;
+  left: 50%;
+  width: 1px;
+}
+
+.light-dome-dot {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 3px solid #ffffff;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 2px 8px rgba(17, 24, 39, 0.25);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.advanced-light-controls {
+  border: 1px solid #d8e0ea;
+  background: #ffffff;
+}
+
+.advanced-light-controls summary {
+  min-height: 36px;
+  padding: 8px 10px;
+  color: #334155;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.advanced-light-controls .control-stack {
+  padding: 0 10px 10px;
+}
+
 .endpoint-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

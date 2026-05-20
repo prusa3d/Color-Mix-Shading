@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent } from 'react';
 import { getTriangleCentroidComponent, getTriangleNormal } from './lib/geometry/analyzeMesh';
 import { exportMeshAsThreeMf } from './lib/export/threeMf';
 import { parseMeshFile } from './lib/mesh/parseMesh';
@@ -15,6 +15,16 @@ const SURFACE_SAFE_FACE_COUNT = 150_000;
 const SURFACE_WARN_FACE_COUNT = 500_000;
 const ASSIGNMENT_CHUNK_SIZE = 20_000;
 const AXIS_INDEX: Record<Axis, number> = { x: 0, y: 1, z: 2 };
+const LIGHT_PRESETS: Array<{ name: string; direction: Vec3 }> = [
+  { name: 'Front Left', direction: [-1, -1, 1] },
+  { name: 'Front Right', direction: [1, -1, 1] },
+  { name: 'Back Left', direction: [-1, 1, 1] },
+  { name: 'Back Right', direction: [1, 1, 1] },
+  { name: 'Left Side', direction: [-1, 0, 0.2] },
+  { name: 'Right Side', direction: [1, 0, 0.2] },
+  { name: 'Overhead', direction: [0, 0, 1] },
+  { name: 'Zenithal 45', direction: [0, -Math.SQRT1_2, Math.SQRT1_2] },
+];
 
 function hexToRgb(color: string): [number, number, number] {
   const normalized = color.replace('#', '');
@@ -75,6 +85,107 @@ function bandToMaterialIndex(band: number, materialCount: number): number {
 function quantize(value: number, count: number): number {
   const clamped = Math.min(1, Math.max(0, value));
   return Math.min(count - 1, Math.floor(clamped * count));
+}
+
+function directionFromDomePosition(dx: number, dy: number): Vec3 {
+  const length = Math.hypot(dx, dy);
+  const clampedX = length > 1 ? dx / length : dx;
+  const clampedY = length > 1 ? dy / length : dy;
+  const radius = Math.min(1, Math.hypot(clampedX, clampedY));
+  return normalize([clampedX, clampedY, Math.sqrt(Math.max(0, 1 - radius * radius))]);
+}
+
+function LightDirectionControls({
+  lightDirection,
+  onLightDirectionChange,
+}: {
+  lightDirection: Vec3;
+  onLightDirectionChange: (direction: Vec3) => void;
+}) {
+  const domeRef = useRef<HTMLDivElement | null>(null);
+  const normalizedLight = normalize(lightDirection);
+  const domeRadius = Math.min(1, Math.hypot(normalizedLight[0], normalizedLight[1]));
+  const domeAngle = Math.atan2(normalizedLight[1], normalizedLight[0]);
+  const domeX = Math.cos(domeAngle) * domeRadius;
+  const domeY = Math.sin(domeAngle) * domeRadius;
+
+  const updateFromPointer = (event: PointerEvent<HTMLDivElement>) => {
+    const bounds = domeRef.current?.getBoundingClientRect();
+    if (!bounds) {
+      return;
+    }
+
+    const centerX = bounds.left + bounds.width / 2;
+    const centerY = bounds.top + bounds.height / 2;
+    const radius = bounds.width / 2;
+    const dx = (event.clientX - centerX) / radius;
+    const dy = (event.clientY - centerY) / radius;
+    onLightDirectionChange(directionFromDomePosition(dx, dy));
+  };
+
+  return (
+    <div className="light-direction-control">
+      <div className="preset-grid">
+        {LIGHT_PRESETS.map((preset) => (
+          <button type="button" key={preset.name} onClick={() => onLightDirectionChange(normalize(preset.direction))}>
+            {preset.name}
+          </button>
+        ))}
+      </div>
+
+      <div
+        className="light-dome"
+        ref={domeRef}
+        role="slider"
+        tabIndex={0}
+        aria-label="Light direction dome"
+        aria-valuetext={`X ${normalizedLight[0].toFixed(2)}, Y ${normalizedLight[1].toFixed(2)}, Z ${normalizedLight[2].toFixed(2)}`}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          updateFromPointer(event);
+        }}
+        onPointerMove={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            updateFromPointer(event);
+          }
+        }}
+      >
+        <span className="light-dome-axis light-dome-axis-x" />
+        <span className="light-dome-axis light-dome-axis-y" />
+        <span
+          className="light-dome-dot"
+          style={{
+            left: `${50 + domeX * 50}%`,
+            top: `${50 + domeY * 50}%`,
+          }}
+        />
+      </div>
+
+      <details className="advanced-light-controls">
+        <summary>Advanced</summary>
+        <div className="control-stack">
+          {(['0', '1', '2'] as const).map((component, index) => (
+            <label className="slider-row" key={component}>
+              <span>{['X', 'Y', 'Z'][index]}</span>
+              <input
+                type="range"
+                min="-1"
+                max="1"
+                step="0.01"
+                value={normalizedLight[index]}
+                onChange={(event) => {
+                  const next: Vec3 = [...normalizedLight];
+                  next[index] = Number(event.target.value);
+                  onLightDirectionChange(normalize(next));
+                }}
+              />
+              <output>{normalizedLight[index].toFixed(2)}</output>
+            </label>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
 }
 
 export default function App() {
@@ -473,29 +584,13 @@ export default function App() {
           </div>
 
           {mode === 'directional' ? (
-            <div className="control-stack">
-              {(['0', '1', '2'] as const).map((component, index) => (
-                <label className="slider-row" key={component}>
-                  <span>{['X', 'Y', 'Z'][index]}</span>
-                  <input
-                    type="range"
-                    min="-1"
-                    max="1"
-                    step="0.01"
-                    value={lightDirection[index]}
-                    onChange={(event) =>
-                      setLightDirection((current) => {
-                        setStatus('Assigning materials...');
-                        const next: Vec3 = [...current];
-                        next[index] = Number(event.target.value);
-                        return next;
-                      })
-                    }
-                  />
-                  <output>{lightDirection[index].toFixed(2)}</output>
-                </label>
-              ))}
-            </div>
+            <LightDirectionControls
+              lightDirection={lightDirection}
+              onLightDirectionChange={(direction) => {
+                setStatus('Assigning materials...');
+                setLightDirection(direction);
+              }}
+            />
           ) : (
             <label className="field">
               <span>Axis</span>
@@ -529,6 +624,7 @@ export default function App() {
         previewMode={previewMode}
         orbitEnabled={orbitEnabled}
         pointSize={pointSize}
+        lightDirection={lightDirection}
       />
     </main>
   );
