@@ -492,7 +492,6 @@ export default function App() {
                       lightDirection={secondLightDirection}
                       onLightDirectionChange={setSecondLightDirection}
                     />
-                    <p className="helper-copy">Preview only — does not affect 3MF export yet.</p>
                   </>
                 ) : null}
               </div>
