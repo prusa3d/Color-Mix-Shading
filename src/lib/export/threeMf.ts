@@ -1,6 +1,6 @@
 import { saveAs } from 'file-saver';
 import JSZip from 'jszip';
-import type { PaletteMaterial, ParsedMesh } from '../../types/mesh';
+import type { MaterialRecipe, ParsedMesh } from '../../types/mesh';
 import { weldMesh } from '../mesh/weldMesh';
 import { slugifyFileName } from './download';
 
@@ -55,7 +55,7 @@ function materialIndexToPrusaSegmentation(materialIndex: number): string {
   return encodePrusaTriangleState(materialIndex + 1);
 }
 
-async function createModelXml(mesh: ParsedMesh, assignments: Uint8Array, palette: PaletteMaterial[]): Promise<string> {
+async function createModelXml(mesh: ParsedMesh, assignments: Uint8Array, materials: MaterialRecipe[]): Promise<string> {
   const welded = await weldMesh(mesh);
 
   const verticesChunks: string[] = [];
@@ -82,7 +82,7 @@ async function createModelXml(mesh: ParsedMesh, assignments: Uint8Array, palette
   }
   const trianglesXml = trianglesChunks.join('');
 
-  const materialsXml = palette
+  const materialsXml = materials
     .map((material, index) => `<base name="${escapeXml(material.name || `Material ${index + 1}`)}" displaycolor="${normalizeHexColor(material.color)}" />`)
     .join('');
 
@@ -116,10 +116,11 @@ function createContentTypesXml(): string {
 </Types>`;
 }
 
-function createSlic3rPeConfig(palette: PaletteMaterial[]): string {
-  const highlight = normalizeHexColor(palette[0]?.color ?? '#FFFFFF');
-  const shadow = normalizeHexColor(palette[1]?.color ?? '#000000');
-  return `; extruder_colour = ${highlight};${shadow}\n`;
+function createSlic3rPeConfig(materials: MaterialRecipe[]): string {
+  const physicalColors = materials
+    .filter((m) => !m.components)
+    .map((m) => normalizeHexColor(m.color));
+  return `; extruder_colour = ${physicalColors.join(';')}\n`;
 }
 
 function createSlic3rPeModelConfig(mesh: ParsedMesh): string {
@@ -140,34 +141,28 @@ function createSlic3rPeModelConfig(mesh: ParsedMesh): string {
 </config>`;
 }
 
-function roundRatio(value: number): number {
-  return Math.round(value * 10000) / 10000;
-}
+function createFullSpectrumMetadata(materials: MaterialRecipe[]): string {
+  const physicalExtruders: { color: string; id: number }[] = [];
+  const virtualExtruders: {
+    color: string;
+    components: { extruder: number; ratio: number }[];
+    id: number;
+    kind: string;
+  }[] = [];
 
-function createFullSpectrumMetadata(palette: PaletteMaterial[]): string {
-  const highlight = palette[0]?.color ?? '#FFFFFF';
-  const shadow = palette[1]?.color ?? '#000000';
-  const totalMaterials = palette.length;
-
-  const physicalExtruders = [
-    { color: normalizeHexColor(highlight), id: 1 },
-    { color: normalizeHexColor(shadow), id: 2 },
-  ];
-
-  const virtualExtruders = [];
-  for (let paletteIndex = 2; paletteIndex < totalMaterials; paletteIndex += 1) {
-    const highlightRatio = roundRatio((paletteIndex - 1) / (totalMaterials - 1));
-    const shadowRatio = roundRatio((totalMaterials - paletteIndex) / (totalMaterials - 1));
-    virtualExtruders.push({
-      color: normalizeHexColor(palette[paletteIndex].color),
-      components: [
-        { extruder: 1, ratio: highlightRatio },
-        { extruder: 2, ratio: shadowRatio },
-      ],
-      id: paletteIndex + 1,
-      kind: 'fullspectrum',
-    });
-  }
+  materials.forEach((material, index) => {
+    const id = index + 1;
+    if (!material.components || material.components.length === 0) {
+      physicalExtruders.push({ color: normalizeHexColor(material.color), id });
+    } else {
+      virtualExtruders.push({
+        color: normalizeHexColor(material.color),
+        components: material.components.map((c) => ({ extruder: c.extruderId, ratio: c.ratio })),
+        id,
+        kind: 'fullspectrum',
+      });
+    }
+  });
 
   return JSON.stringify(
     {
@@ -190,20 +185,20 @@ function createRootRelationshipsXml(): string {
 export async function exportMeshAsThreeMf(
   mesh: ParsedMesh,
   assignments: Uint8Array,
-  palette: PaletteMaterial[],
+  materials: MaterialRecipe[],
 ): Promise<{ fileName: string; materialCount: number }> {
   const zip = new JSZip();
   const fileName = `${slugifyFileName(mesh.name)}-color-mix.3mf`;
 
   zip.file('[Content_Types].xml', createContentTypesXml());
   zip.file('_rels/.rels', createRootRelationshipsXml());
-  zip.file('3D/3dmodel.model', await createModelXml(mesh, assignments, palette));
-  zip.file('Metadata/Prusa_Slicer_full_spectrum.json', createFullSpectrumMetadata(palette));
-  zip.file('Metadata/Slic3r_PE.config', createSlic3rPeConfig(palette));
+  zip.file('3D/3dmodel.model', await createModelXml(mesh, assignments, materials));
+  zip.file('Metadata/Prusa_Slicer_full_spectrum.json', createFullSpectrumMetadata(materials));
+  zip.file('Metadata/Slic3r_PE.config', createSlic3rPeConfig(materials));
   zip.file('Metadata/Slic3r_PE_model.config', createSlic3rPeModelConfig(mesh));
 
   const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
   saveAs(new Blob([zipBlob], { type: 'model/3mf' }), fileName);
 
-  return { fileName, materialCount: palette.length };
+  return { fileName, materialCount: materials.length };
 }

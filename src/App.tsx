@@ -326,14 +326,19 @@ export default function App() {
     setStatus('Computing material assignments...');
 
     try {
-      const assignments = await computeAssignments(originalMesh, {
+      const { assignments, materials } = await computeAssignments(originalMesh, {
         mode,
         lightDirection,
         axis,
         materialCount,
+        palette,
+        secondLight:
+          secondLightColor !== null
+            ? { direction: secondLightDirection, color: secondLightColor }
+            : null,
       });
       setStatus('Packaging 3MF...');
-      const result = await exportMeshAsThreeMf(originalMesh, assignments, palette);
+      const result = await exportMeshAsThreeMf(originalMesh, assignments, materials);
       setStatus(`Exported ${result.fileName} with ${result.materialCount} materials.`);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '3MF export failed.');

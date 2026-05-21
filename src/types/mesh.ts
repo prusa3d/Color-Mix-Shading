@@ -19,3 +19,9 @@ export type PaletteMaterial = {
 
 export type AssignmentMode = 'directional' | 'height';
 export type Axis = 'x' | 'y' | 'z';
+
+export type MaterialRecipe = {
+  name: string;
+  color: string;
+  components?: { extruderId: number; ratio: number }[];
+};
