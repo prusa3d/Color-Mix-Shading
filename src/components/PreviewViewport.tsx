@@ -1,22 +1,21 @@
-import { Grid, OrbitControls } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { BufferGeometry, Line, LineBasicMaterial, MeshBasicMaterial, OrthographicCamera, PointsMaterial, Quaternion, Vector3 } from 'three';
+import { BufferGeometry, Line, LineBasicMaterial, MeshBasicMaterial, OrthographicCamera, Quaternion, Vector3 } from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import type { PaletteMaterial, ParsedMesh, PreviewMesh, PreviewMode, Vec3 } from '../types/mesh';
-import { createColoredPreviewGeometry, createPointPreviewGeometry } from '../lib/preview/createPreviewGeometry';
+import type { AssignmentMode, Axis, PaletteMaterial, ParsedMesh, Vec3 } from '../types/mesh';
+import { createSurfaceGeometry } from '../lib/preview/createPreviewGeometry';
+import { createShadingMaterial, updateShadingUniforms } from '../lib/preview/shadingMaterial';
 
 type PreviewViewportProps = {
-  originalFaceCount: number;
-  originalMesh: ParsedMesh | null;
-  previewMesh: PreviewMesh | null;
-  assignments: Uint8Array;
+  mesh: ParsedMesh | null;
   palette: PaletteMaterial[];
-  previewMode: PreviewMode;
-  orbitEnabled: boolean;
-  pointSize: number;
   lightDirection: Vec3;
+  mode: AssignmentMode;
+  axis: Axis;
 };
+
+const AXIS_INDEX: Record<Axis, number> = { x: 0, y: 1, z: 2 };
 
 const CAMERA_VIEWS = {
   front: {
@@ -62,7 +61,7 @@ type MeshBounds = {
 const PRESET_VIEW_PADDING = 1.1;
 const MIN_VIEW_SIZE = 1;
 
-function computeMeshBounds(mesh: ParsedMesh | PreviewMesh | null): MeshBounds | null {
+function computeMeshBounds(mesh: ParsedMesh | null): MeshBounds | null {
   if (!mesh || mesh.positions.length < 3) {
     return null;
   }
@@ -193,62 +192,41 @@ function PresetCameraRig({
   return null;
 }
 
-function MeshPreview({
-  previewMesh,
-  assignments,
+function ShadedMesh({
+  mesh,
   palette,
-  previewMode,
-  pointSize,
+  lightDirection,
+  mode,
+  axis,
+  heightMin,
+  heightMax,
 }: {
-  previewMesh: PreviewMesh;
-  assignments: Uint8Array;
+  mesh: ParsedMesh;
   palette: PaletteMaterial[];
-  previewMode: PreviewMode;
-  pointSize: number;
+  lightDirection: Vec3;
+  mode: AssignmentMode;
+  axis: Axis;
+  heightMin: number;
+  heightMax: number;
 }) {
-  const meshGeometry = useMemo(
-    () => (previewMode !== 'points' ? createColoredPreviewGeometry(previewMesh, assignments, palette) : null),
-    [assignments, palette, previewMesh, previewMode],
-  );
-  const pointGeometry = useMemo(
-    () => (previewMode === 'points' ? createPointPreviewGeometry(previewMesh, assignments, palette) : null),
-    [assignments, palette, previewMesh, previewMode],
-  );
-  const meshMaterial = useMemo(() => new MeshBasicMaterial({ vertexColors: true }), []);
-  const pointMaterial = useMemo(
-    () => new PointsMaterial({
-      vertexColors: true,
-      size: pointSize,
-      sizeAttenuation: false,
-      depthTest: true,
-      transparent: false,
-      opacity: 1,
-    }),
-    [pointSize],
-  );
+  const invalidate = useThree((state) => state.invalidate);
+  const geometry = useMemo(() => createSurfaceGeometry(mesh), [mesh]);
+  const material = useMemo(() => createShadingMaterial(), []);
+
+  useEffect(() => {
+    updateShadingUniforms(material, { lightDirection, palette, mode, axis, heightMin, heightMax });
+    invalidate();
+  }, [axis, heightMax, heightMin, invalidate, lightDirection, material, mode, palette]);
 
   useEffect(() => () => {
-    meshGeometry?.dispose();
-  }, [meshGeometry]);
+    geometry.dispose();
+  }, [geometry]);
 
   useEffect(() => () => {
-    pointGeometry?.dispose();
-  }, [pointGeometry]);
+    material.dispose();
+  }, [material]);
 
-  useEffect(() => () => {
-    meshMaterial.dispose();
-    pointMaterial.dispose();
-  }, [meshMaterial, pointMaterial]);
-
-  if (previewMode === 'points' && pointGeometry) {
-    return <points geometry={pointGeometry} material={pointMaterial} />;
-  }
-
-  if (!meshGeometry) {
-    return null;
-  }
-
-  return <mesh geometry={meshGeometry} material={meshMaterial} />;
+  return <mesh geometry={geometry} material={material} />;
 }
 
 function LightDirectionHelper({
@@ -305,36 +283,40 @@ function LightDirectionHelper({
 }
 
 export function PreviewViewport({
-  originalFaceCount,
-  originalMesh,
-  previewMesh,
-  assignments,
+  mesh,
   palette,
-  previewMode,
-  orbitEnabled,
-  pointSize,
   lightDirection,
+  mode,
+  axis,
 }: PreviewViewportProps) {
   const [cameraView, setCameraView] = useState<CameraView>('iso');
   const orbitControls = useRef<OrbitControlsImpl | null>(null);
-  const bounds = useMemo(() => computeMeshBounds(originalMesh ?? previewMesh), [originalMesh, previewMesh]);
-  const renderVersion = `${cameraView}-${previewMode}-${pointSize}-${previewMesh?.faceCount ?? 0}-${assignments.length}-${palette.map((item) => item.color).join('|')}-${lightDirection.join(',')}`;
+  const bounds = useMemo(() => computeMeshBounds(mesh), [mesh]);
+  const heightRange = useMemo(() => {
+    if (!bounds) {
+      return { min: 0, max: 1 };
+    }
+    const axisIndex = AXIS_INDEX[axis];
+    const half = bounds.size.getComponent(axisIndex) / 2;
+    const center = bounds.center.getComponent(axisIndex);
+    const min = center - half;
+    const max = center + half;
+    return min === max ? { min, max: min + 1 } : { min, max };
+  }, [axis, bounds]);
+  const renderVersion = `${cameraView}-${mesh?.faceCount ?? 0}-${palette.map((item) => item.color).join('|')}-${lightDirection.join(',')}-${mode}-${axis}`;
 
   return (
     <section className="viewport-panel">
       <div className="viewport-header">
         <div>
           <p className="eyebrow">Preview</p>
-          <h2>{previewMesh ? previewMesh.name : 'Import a mesh'}</h2>
+          <h2>{mesh ? mesh.name : 'Import a mesh'}</h2>
         </div>
-        {previewMesh ? (
-          <p className="viewport-meta">
-            {previewMesh.faceCount.toLocaleString()} shown / {originalFaceCount.toLocaleString()} faces
-            {previewMesh.sampled ? ' - sampled' : ''}
-          </p>
+        {mesh ? (
+          <p className="viewport-meta">{mesh.faceCount.toLocaleString()} faces</p>
         ) : null}
       </div>
-      {previewMesh ? (
+      {mesh ? (
         <div className="view-buttons">
           {(Object.keys(CAMERA_VIEWS) as CameraView[]).map((view) => (
             <button className={cameraView === view ? 'active' : ''} type="button" key={view} onClick={() => setCameraView(view)}>
@@ -344,29 +326,29 @@ export function PreviewViewport({
         </div>
       ) : null}
       <div className="canvas-frame">
-        {previewMesh ? (
+        {mesh ? (
           <Canvas orthographic camera={{ position: [1, -1, 1], near: 0.1, far: 10000, zoom: 1 }} frameloop="demand">
             <color attach="background" args={['#f6f8fb']} />
-            <Grid
-              args={[300, 300]}
-              cellColor="#cbd5e1"
-              sectionColor="#7c8da3"
-              cellThickness={0.45}
-              sectionThickness={0.9}
-              fadeDistance={340}
-              fadeStrength={1.4}
-              infiniteGrid
+            <ShadedMesh
+              mesh={mesh}
+              palette={palette}
+              lightDirection={lightDirection}
+              mode={mode}
+              axis={axis}
+              heightMin={heightRange.min}
+              heightMax={heightRange.max}
             />
-            <MeshPreview previewMesh={previewMesh} assignments={assignments} palette={palette} previewMode={previewMode} pointSize={pointSize} />
-            <LightDirectionHelper bounds={bounds} lightDirection={lightDirection} />
-            <OrbitControls ref={orbitControls} makeDefault enabled={orbitEnabled} enableDamping={false} />
+            {mode === 'directional' ? (
+              <LightDirectionHelper bounds={bounds} lightDirection={lightDirection} />
+            ) : null}
+            <OrbitControls ref={orbitControls} makeDefault enableDamping={false} />
             <PresetCameraRig bounds={bounds} cameraView={cameraView} orbitControls={orbitControls} />
             <DemandRenderSignal version={renderVersion} />
           </Canvas>
         ) : (
           <div className="empty-preview">
             <strong>No mesh loaded</strong>
-            <span>Upload an STL or OBJ to assign palette bands by light direction or height.</span>
+            <span>Drop an STL or OBJ anywhere on the window to load it.</span>
           </div>
         )}
       </div>

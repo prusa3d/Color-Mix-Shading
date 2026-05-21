@@ -6,12 +6,6 @@ export type ParsedMesh = {
   faceCount: number;
 };
 
-export type PreviewMesh = ParsedMesh & {
-  sourceFaceIndices: Uint32Array;
-  faceLimit: number;
-  sampled: boolean;
-};
-
 export type FaceMetrics = {
   normal: Vec3;
   centroid: Vec3;
@@ -25,5 +19,3 @@ export type PaletteMaterial = {
 
 export type AssignmentMode = 'directional' | 'height';
 export type Axis = 'x' | 'y' | 'z';
-export type PreviewQuality = 'low' | 'medium' | 'high' | 'full';
-export type PreviewMode = 'surface' | 'points' | 'sampled-triangles';

@@ -1,12 +1,16 @@
+import { saveAs } from 'file-saver';
 import JSZip from 'jszip';
 import type { PaletteMaterial, ParsedMesh } from '../../types/mesh';
 import { weldMesh } from '../mesh/weldMesh';
-import { downloadBlob, slugifyFileName } from './download';
+import { slugifyFileName } from './download';
 
 const MODEL_CONTENT_TYPE = 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml';
 const START_PART_RELATIONSHIP = 'http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel';
 const CORE_NAMESPACE = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
 const PRUSA_NAMESPACE = 'http://schemas.slic3r.org/3mf/2017/06';
+const EXPORT_CHUNK_SIZE = 50_000;
+
+const yieldToBrowser = (): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, 0));
 
 function escapeXml(value: string): string {
   return value
@@ -51,18 +55,33 @@ function materialIndexToPrusaSegmentation(materialIndex: number): string {
   return encodePrusaTriangleState(materialIndex + 1);
 }
 
-function createModelXml(mesh: ParsedMesh, assignments: Uint8Array, palette: PaletteMaterial[]): string {
-  const welded = weldMesh(mesh);
-  const verticesXml = welded.vertices
-    .map(([x, y, z]) => `<vertex x="${x}" y="${y}" z="${z}" />`)
-    .join('');
-  const trianglesXml = welded.faces
-    .map((face, index) => {
-      const materialIndex = assignments[index] ?? 0;
+async function createModelXml(mesh: ParsedMesh, assignments: Uint8Array, palette: PaletteMaterial[]): Promise<string> {
+  const welded = await weldMesh(mesh);
+
+  const verticesChunks: string[] = [];
+  for (let chunkStart = 0; chunkStart < welded.vertices.length; chunkStart += EXPORT_CHUNK_SIZE) {
+    await yieldToBrowser();
+    const chunkEnd = Math.min(chunkStart + EXPORT_CHUNK_SIZE, welded.vertices.length);
+    for (let i = chunkStart; i < chunkEnd; i += 1) {
+      const [x, y, z] = welded.vertices[i];
+      verticesChunks.push(`<vertex x="${x}" y="${y}" z="${z}" />`);
+    }
+  }
+  const verticesXml = verticesChunks.join('');
+
+  const trianglesChunks: string[] = [];
+  for (let chunkStart = 0; chunkStart < welded.faces.length; chunkStart += EXPORT_CHUNK_SIZE) {
+    await yieldToBrowser();
+    const chunkEnd = Math.min(chunkStart + EXPORT_CHUNK_SIZE, welded.faces.length);
+    for (let i = chunkStart; i < chunkEnd; i += 1) {
+      const face = welded.faces[i];
+      const materialIndex = assignments[i] ?? 0;
       const prusaSegmentation = materialIndexToPrusaSegmentation(materialIndex);
-      return `<triangle v1="${face[0]}" v2="${face[1]}" v3="${face[2]}" pid="1" p1="${materialIndex}" p2="${materialIndex}" p3="${materialIndex}" slic3rpe:mmu_segmentation="${prusaSegmentation}" />`;
-    })
-    .join('');
+      trianglesChunks.push(`<triangle v1="${face[0]}" v2="${face[1]}" v3="${face[2]}" pid="1" p1="${materialIndex}" p2="${materialIndex}" p3="${materialIndex}" slic3rpe:mmu_segmentation="${prusaSegmentation}" />`);
+    }
+  }
+  const trianglesXml = trianglesChunks.join('');
+
   const materialsXml = palette
     .map((material, index) => `<base name="${escapeXml(material.name || `Material ${index + 1}`)}" displaycolor="${normalizeHexColor(material.color)}" />`)
     .join('');
@@ -92,7 +111,73 @@ function createContentTypesXml(): string {
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />
   <Default Extension="model" ContentType="${MODEL_CONTENT_TYPE}" />
+  <Default Extension="json" ContentType="application/json" />
+  <Default Extension="config" ContentType="application/octet-stream" />
 </Types>`;
+}
+
+function createSlic3rPeConfig(palette: PaletteMaterial[]): string {
+  const highlight = normalizeHexColor(palette[0]?.color ?? '#FFFFFF');
+  const shadow = normalizeHexColor(palette[1]?.color ?? '#000000');
+  return `; extruder_colour = ${highlight};${shadow}\n`;
+}
+
+function createSlic3rPeModelConfig(mesh: ParsedMesh): string {
+  const lastFaceIndex = Math.max(0, mesh.faceCount - 1);
+  const name = escapeXml(mesh.name);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<config>
+ <object id="2" instances_count="1">
+  <metadata type="object" key="name" value="${name}"/>
+  <volume firstid="0" lastid="${lastFaceIndex}">
+   <metadata type="volume" key="name" value="${name}"/>
+   <metadata type="volume" key="volume_type" value="ModelPart"/>
+   <metadata type="volume" key="source_object_id" value="0"/>
+   <metadata type="volume" key="source_volume_id" value="0"/>
+   <mesh edges_fixed="0" degenerate_facets="0" facets_removed="0" facets_reversed="0" backwards_edges="0"/>
+  </volume>
+ </object>
+</config>`;
+}
+
+function roundRatio(value: number): number {
+  return Math.round(value * 10000) / 10000;
+}
+
+function createFullSpectrumMetadata(palette: PaletteMaterial[]): string {
+  const highlight = palette[0]?.color ?? '#FFFFFF';
+  const shadow = palette[1]?.color ?? '#000000';
+  const totalMaterials = palette.length;
+
+  const physicalExtruders = [
+    { color: normalizeHexColor(highlight), id: 1 },
+    { color: normalizeHexColor(shadow), id: 2 },
+  ];
+
+  const virtualExtruders = [];
+  for (let paletteIndex = 2; paletteIndex < totalMaterials; paletteIndex += 1) {
+    const highlightRatio = roundRatio((paletteIndex - 1) / (totalMaterials - 1));
+    const shadowRatio = roundRatio((totalMaterials - paletteIndex) / (totalMaterials - 1));
+    virtualExtruders.push({
+      color: normalizeHexColor(palette[paletteIndex].color),
+      components: [
+        { extruder: 1, ratio: highlightRatio },
+        { extruder: 2, ratio: shadowRatio },
+      ],
+      id: paletteIndex + 1,
+      kind: 'fullspectrum',
+    });
+  }
+
+  return JSON.stringify(
+    {
+      physical_extruders: physicalExtruders,
+      version: 1,
+      virtual_extruders: virtualExtruders,
+    },
+    null,
+    4,
+  );
 }
 
 function createRootRelationshipsXml(): string {
@@ -112,10 +197,13 @@ export async function exportMeshAsThreeMf(
 
   zip.file('[Content_Types].xml', createContentTypesXml());
   zip.file('_rels/.rels', createRootRelationshipsXml());
-  zip.file('3D/3dmodel.model', createModelXml(mesh, assignments, palette));
+  zip.file('3D/3dmodel.model', await createModelXml(mesh, assignments, palette));
+  zip.file('Metadata/Prusa_Slicer_full_spectrum.json', createFullSpectrumMetadata(palette));
+  zip.file('Metadata/Slic3r_PE.config', createSlic3rPeConfig(palette));
+  zip.file('Metadata/Slic3r_PE_model.config', createSlic3rPeModelConfig(mesh));
 
-  const blob = await zip.generateAsync({ type: 'blob' });
-  downloadBlob(blob, fileName);
+  const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  saveAs(new Blob([zipBlob], { type: 'model/3mf' }), fileName);
 
   return { fileName, materialCount: palette.length };
 }

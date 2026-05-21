@@ -1,20 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent } from 'react';
-import { getTriangleCentroidComponent, getTriangleNormal } from './lib/geometry/analyzeMesh';
 import { exportMeshAsThreeMf } from './lib/export/threeMf';
+import { computeAssignments } from './lib/materials/assignMaterials';
 import { parseMeshFile } from './lib/mesh/parseMesh';
 import { normalize } from './lib/mesh/vector';
-import { createFullPreviewMesh, createSampledPreviewMesh, PREVIEW_FACE_LIMITS } from './lib/preview/createPreviewMesh';
 import { PreviewViewport } from './components/PreviewViewport';
-import type { AssignmentMode, Axis, PaletteMaterial, ParsedMesh, PreviewMesh, PreviewMode, PreviewQuality, Vec3 } from './types/mesh';
+import type { AssignmentMode, Axis, PaletteMaterial, ParsedMesh, Vec3 } from './types/mesh';
 
 const DEFAULT_LIGHT: Vec3 = [0.35, 0.45, 0.82];
 const DEFAULT_HIGHLIGHT = '#F8D36B';
 const DEFAULT_SHADOW = '#6C2A00';
-const POINT_LIMITS = [50_000, 100_000, 250_000];
-const SURFACE_SAFE_FACE_COUNT = 150_000;
-const SURFACE_WARN_FACE_COUNT = 500_000;
-const ASSIGNMENT_CHUNK_SIZE = 20_000;
-const AXIS_INDEX: Record<Axis, number> = { x: 0, y: 1, z: 2 };
 const LIGHT_PRESETS: Array<{ name: string; direction: Vec3 }> = [
   { name: 'Front Left', direction: [-1, -1, 1] },
   { name: 'Front Right', direction: [1, -1, 1] },
@@ -66,33 +60,18 @@ function createShadingPalette(highlightColor: string, shadowColor: string, mater
   return palette;
 }
 
-function bandToMaterialIndex(band: number, materialCount: number): number {
-  if (materialCount <= 1) {
-    return 0;
-  }
-
-  if (band <= 0) {
-    return 1;
-  }
-
-  if (band >= materialCount - 1) {
-    return 0;
-  }
-
-  return band + 1;
-}
-
-function quantize(value: number, count: number): number {
-  const clamped = Math.min(1, Math.max(0, value));
-  return Math.min(count - 1, Math.floor(clamped * count));
-}
-
 function directionFromDomePosition(dx: number, dy: number): Vec3 {
   const length = Math.hypot(dx, dy);
   const clampedX = length > 1 ? dx / length : dx;
   const clampedY = length > 1 ? dy / length : dy;
   const radius = Math.min(1, Math.hypot(clampedX, clampedY));
   return normalize([clampedX, clampedY, Math.sqrt(Math.max(0, 1 - radius * radius))]);
+}
+
+function directionsMatch(a: Vec3, b: Vec3): boolean {
+  const na = normalize(a);
+  const nb = normalize(b);
+  return na[0] * nb[0] + na[1] * nb[1] + na[2] * nb[2] > 0.999;
 }
 
 function LightDirectionControls({
@@ -125,14 +104,6 @@ function LightDirectionControls({
 
   return (
     <div className="light-direction-control">
-      <div className="preset-grid">
-        {LIGHT_PRESETS.map((preset) => (
-          <button type="button" key={preset.name} onClick={() => onLightDirectionChange(normalize(preset.direction))}>
-            {preset.name}
-          </button>
-        ))}
-      </div>
-
       <div
         className="light-dome"
         ref={domeRef}
@@ -159,6 +130,22 @@ function LightDirectionControls({
             top: `${50 + domeY * 50}%`,
           }}
         />
+      </div>
+
+      <div className="preset-grid">
+        {LIGHT_PRESETS.map((preset) => {
+          const isActive = directionsMatch(lightDirection, preset.direction);
+          return (
+            <button
+              type="button"
+              key={preset.name}
+              className={isActive ? 'active' : ''}
+              onClick={() => onLightDirectionChange(normalize(preset.direction))}
+            >
+              {preset.name}
+            </button>
+          );
+        })}
       </div>
 
       <details className="advanced-light-controls">
@@ -190,12 +177,6 @@ function LightDirectionControls({
 
 export default function App() {
   const [originalMesh, setOriginalMesh] = useState<ParsedMesh | null>(null);
-  const [previewMesh, setPreviewMesh] = useState<PreviewMesh | null>(null);
-  const [previewQuality, setPreviewQuality] = useState<PreviewQuality>('medium');
-  const [previewMode, setPreviewMode] = useState<PreviewMode>('surface');
-  const [pointLimit, setPointLimit] = useState(100_000);
-  const [pointSize, setPointSize] = useState(1.8);
-  const [orbitEnabled, setOrbitEnabled] = useState(false);
   const [materialCount, setMaterialCount] = useState(4);
   const [highlightColor, setHighlightColor] = useState(DEFAULT_HIGHLIGHT);
   const [shadowColor, setShadowColor] = useState(DEFAULT_SHADOW);
@@ -203,197 +184,102 @@ export default function App() {
   const [axis, setAxis] = useState<Axis>('z');
   const [lightDirection, setLightDirection] = useState<Vec3>(DEFAULT_LIGHT);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [status, setStatus] = useState<string>('Ready for STL or OBJ import.');
   const [error, setError] = useState<string | null>(null);
-  const [assignments, setAssignments] = useState<Uint8Array>(new Uint8Array());
+  const [isDragging, setIsDragging] = useState(false);
 
   const palette = useMemo(
     () => createShadingPalette(highlightColor, shadowColor, materialCount),
     [highlightColor, materialCount, shadowColor],
   );
-  useEffect(() => {
-    if (!originalMesh) {
-      setAssignments(new Uint8Array());
-      return;
-    }
 
-    let isCancelled = false;
-    const nextAssignments = new Uint8Array(originalMesh.faceCount);
-    const normalizedLight = normalize(lightDirection);
-    const axisIndex = AXIS_INDEX[axis];
-    let heightMin = 0;
-    let heightMax = 1;
+  const isProcessingRef = useRef(isProcessing);
+  isProcessingRef.current = isProcessing;
+  const dragCounter = useRef(0);
 
-    const assignChunk = (startIndex: number) => {
-      const endIndex = Math.min(originalMesh.faceCount, startIndex + ASSIGNMENT_CHUNK_SIZE);
-
-      for (let faceIndex = startIndex; faceIndex < endIndex; faceIndex += 1) {
-        let band = 0;
-
-        if (mode === 'height') {
-          const value = getTriangleCentroidComponent(originalMesh.positions, faceIndex, axisIndex);
-          band = quantize((value - heightMin) / (heightMax - heightMin), materialCount);
-        } else {
-          const normal = getTriangleNormal(originalMesh.positions, faceIndex);
-          const brightness = Math.max(
-            0,
-            normal[0] * normalizedLight[0] + normal[1] * normalizedLight[1] + normal[2] * normalizedLight[2],
-          );
-          band = quantize(brightness, materialCount);
-        }
-
-        nextAssignments[faceIndex] = bandToMaterialIndex(band, materialCount);
-      }
-
-      if (isCancelled) {
-        return;
-      }
-
-      if (endIndex < originalMesh.faceCount) {
-        window.setTimeout(() => assignChunk(endIndex), 0);
-        return;
-      }
-
-      setAssignments(nextAssignments);
-      setStatus('Rendering preview...');
-    };
-
-    const scanHeightRangeChunk = (startIndex: number) => {
-      const endIndex = Math.min(originalMesh.faceCount, startIndex + ASSIGNMENT_CHUNK_SIZE);
-
-      for (let faceIndex = startIndex; faceIndex < endIndex; faceIndex += 1) {
-        const value = getTriangleCentroidComponent(originalMesh.positions, faceIndex, axisIndex);
-        heightMin = Math.min(heightMin, value);
-        heightMax = Math.max(heightMax, value);
-      }
-
-      if (isCancelled) {
-        return;
-      }
-
-      if (endIndex < originalMesh.faceCount) {
-        window.setTimeout(() => scanHeightRangeChunk(endIndex), 0);
-        return;
-      }
-
-      if (heightMin === heightMax) {
-        heightMax = heightMin + 1;
-      }
-      window.setTimeout(() => assignChunk(0), 0);
-    };
-
-    setStatus('Assigning materials...');
-
-    if (mode === 'height') {
-      const first = getTriangleCentroidComponent(originalMesh.positions, 0, axisIndex);
-      heightMin = first;
-      heightMax = first;
-      window.setTimeout(() => scanHeightRangeChunk(0), 0);
-    } else {
-      window.setTimeout(() => assignChunk(0), 0);
-    }
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [axis, lightDirection, materialCount, mode, originalMesh]);
-
-  const surfacePreviewBlocked = Boolean(
-    originalMesh && previewMode === 'surface' && originalMesh.faceCount > SURFACE_WARN_FACE_COUNT,
-  );
-  const sampledFullPreviewBlocked = Boolean(
-    originalMesh
-      && previewMode === 'sampled-triangles'
-      && previewQuality === 'full'
-      && originalMesh.faceCount > SURFACE_WARN_FACE_COUNT,
-  );
-
-  useEffect(() => {
-    if (!originalMesh) {
-      setPreviewMesh(null);
-      return;
-    }
-
-    let isCancelled = false;
-    const timeoutId = window.setTimeout(() => {
-      if (previewMode === 'surface' && originalMesh.faceCount > SURFACE_WARN_FACE_COUNT) {
-        setPreviewMesh(null);
-        setStatus('Surface preview disabled for meshes over 500k faces. Use Point Preview.');
-        return;
-      }
-
-      if (previewMode === 'sampled-triangles' && previewQuality === 'full' && originalMesh.faceCount > SURFACE_WARN_FACE_COUNT) {
-        setPreviewMesh(null);
-        setStatus('Full triangle preview disabled for meshes over 500k faces. Use Point Preview.');
-        return;
-      }
-
-      setStatus('Creating preview...');
-      const nextPreviewMesh = previewMode === 'surface'
-        ? createFullPreviewMesh(originalMesh)
-        : createSampledPreviewMesh(
-            originalMesh,
-            previewMode === 'points' ? pointLimit : PREVIEW_FACE_LIMITS[previewQuality],
-          );
-
-      if (isCancelled) {
-        return;
-      }
-
-      setPreviewMesh(nextPreviewMesh);
-      setStatus('Rendering preview...');
-      window.setTimeout(() => {
-        if (!isCancelled) {
-          setStatus('Ready');
-        }
-      }, 30);
-    }, 20);
-
-    return () => {
-      isCancelled = true;
-      window.clearTimeout(timeoutId);
-    };
-  }, [originalMesh, pointLimit, previewMode, previewQuality]);
-
-  useEffect(() => {
-    if (!originalMesh || !assignments.length) {
-      return;
-    }
-
-    setStatus('Rendering preview...');
-    const timeoutId = window.setTimeout(() => setStatus('Ready'), 30);
-    return () => window.clearTimeout(timeoutId);
-  }, [assignments, originalMesh, palette]);
-
-  const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) {
+  const loadFile = async (file: File) => {
+    if (isProcessingRef.current) {
       return;
     }
 
     setIsProcessing(true);
     setError(null);
-    setPreviewMesh(null);
-    setStatus('Parsing mesh...');
+    setStatus(`Parsing ${file.name}...`);
 
     try {
       await new Promise((resolve) => window.setTimeout(resolve, 20));
       const parsedMesh = await parseMeshFile(file);
-      setStatus('Assigning materials...');
-      setPreviewMode(parsedMesh.faceCount > SURFACE_WARN_FACE_COUNT ? 'points' : 'surface');
+      setStatus('Building preview...');
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
       setOriginalMesh(parsedMesh);
-      setPreviewQuality('high');
-      setPointLimit(parsedMesh.faceCount > SURFACE_WARN_FACE_COUNT ? 100_000 : 50_000);
-      setOrbitEnabled(parsedMesh.faceCount < SURFACE_SAFE_FACE_COUNT);
+      setStatus(`Ready - ${parsedMesh.faceCount.toLocaleString()} faces`);
     } catch (caughtError) {
       setOriginalMesh(null);
-      setPreviewMesh(null);
       setError(caughtError instanceof Error ? caughtError.message : 'The mesh could not be parsed.');
       setStatus('Import failed.');
     } finally {
       setIsProcessing(false);
-      event.target.value = '';
     }
+  };
+
+  useEffect(() => {
+    const handleDragEnter = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes('Files')) {
+        return;
+      }
+      event.preventDefault();
+      dragCounter.current += 1;
+      setIsDragging(true);
+    };
+
+    const handleDragOver = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes('Files')) {
+        return;
+      }
+      event.preventDefault();
+    };
+
+    const handleDragLeave = (event: DragEvent) => {
+      event.preventDefault();
+      dragCounter.current -= 1;
+      if (dragCounter.current <= 0) {
+        dragCounter.current = 0;
+        setIsDragging(false);
+      }
+    };
+
+    const handleDrop = (event: DragEvent) => {
+      event.preventDefault();
+      dragCounter.current = 0;
+      setIsDragging(false);
+      const file = event.dataTransfer?.files[0];
+      if (file) {
+        void loadFile(file);
+      }
+    };
+
+    window.addEventListener('dragenter', handleDragEnter);
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('dragleave', handleDragLeave);
+    window.addEventListener('drop', handleDrop);
+
+    return () => {
+      window.removeEventListener('dragenter', handleDragEnter);
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('dragleave', handleDragLeave);
+      window.removeEventListener('drop', handleDrop);
+    };
+    // loadFile is stable enough — it reads via isProcessingRef and stable setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      await loadFile(file);
+    }
+    event.target.value = '';
   };
 
   const handleExport = async () => {
@@ -402,10 +288,18 @@ export default function App() {
     }
 
     setIsProcessing(true);
+    setIsExporting(true);
     setError(null);
-    setStatus('Packaging 3MF...');
+    setStatus('Computing material assignments...');
 
     try {
+      const assignments = await computeAssignments(originalMesh, {
+        mode,
+        lightDirection,
+        axis,
+        materialCount,
+      });
+      setStatus('Packaging 3MF...');
       const result = await exportMeshAsThreeMf(originalMesh, assignments, palette);
       setStatus(`Exported ${result.fileName} with ${result.materialCount} materials.`);
     } catch (caughtError) {
@@ -413,6 +307,7 @@ export default function App() {
       setStatus('Export failed.');
     } finally {
       setIsProcessing(false);
+      setIsExporting(false);
     }
   };
 
@@ -428,116 +323,15 @@ export default function App() {
           <h2>Import</h2>
           <label className="file-drop">
             <input type="file" accept=".stl,.obj,model/stl,text/plain" onChange={handleFileUpload} disabled={isProcessing} />
-            <span>Choose STL or OBJ</span>
+            <span>Choose STL or OBJ - or drop one on the window</span>
           </label>
           <p className={error ? 'status status-error' : 'status'}>{error ?? status}</p>
         </section>
 
         <section className="panel-section">
-          <h2>Preview</h2>
-          <label className="field">
-            <span>Mode</span>
-            <select
-              value={previewMode}
-              onChange={(event) => {
-                setStatus('Creating preview...');
-                setPreviewMode(event.target.value as PreviewMode);
-              }}
-            >
-              <option value="surface" disabled={Boolean(originalMesh && originalMesh.faceCount > SURFACE_WARN_FACE_COUNT)}>
-                Surface Preview
-              </option>
-              <option value="points">Point Preview - recommended for large files</option>
-              <option value="sampled-triangles">Sampled Triangles - experimental</option>
-            </select>
-          </label>
-          {previewMode === 'sampled-triangles' ? (
-            <label className="field">
-              <span>Sampled triangle count</span>
-              <select
-                value={previewQuality}
-                onChange={(event) => {
-                  setStatus('Creating preview...');
-                  setPreviewQuality(event.target.value as PreviewQuality);
-                }}
-              >
-                <option value="low">Low - 25k faces</option>
-                <option value="medium">Medium - 75k faces</option>
-                <option value="high">High - 150k faces</option>
-                <option value="full" disabled={Boolean(originalMesh && originalMesh.faceCount > SURFACE_WARN_FACE_COUNT)}>
-                  Full - not sampled
-                </option>
-              </select>
-            </label>
-          ) : null}
-          {previewMode === 'points' ? (
-            <>
-            <label className="field">
-              <span>Sample count</span>
-              <select
-                value={pointLimit}
-                onChange={(event) => {
-                  setStatus('Creating preview...');
-                  setPointLimit(Number(event.target.value));
-                }}
-              >
-                {POINT_LIMITS.map((count) => (
-                  <option key={count} value={count}>{count.toLocaleString()} points</option>
-                ))}
-              </select>
-            </label>
-            <label className="slider-row">
-              <span>Size</span>
-              <input
-                type="range"
-                min="0.5"
-                max="5"
-                step="0.1"
-                value={pointSize}
-                onChange={(event) => {
-                  setStatus('Rendering preview...');
-                  setPointSize(Number(event.target.value));
-                }}
-              />
-              <output>{pointSize.toFixed(1)}</output>
-            </label>
-            </>
-          ) : null}
-          {originalMesh && previewMode === 'surface' && originalMesh.faceCount >= SURFACE_SAFE_FACE_COUNT && originalMesh.faceCount <= SURFACE_WARN_FACE_COUNT ? (
-            <p className="status status-warning">Surface preview renders the full mesh. Point Preview is recommended if interaction gets slow.</p>
-          ) : null}
-          {originalMesh && previewMode === 'surface' && originalMesh.faceCount > SURFACE_WARN_FACE_COUNT ? (
-            <p className="status status-warning">Surface preview is disabled over 500k faces to prevent browser crashes. Point Preview is recommended.</p>
-          ) : null}
-          {surfacePreviewBlocked ? (
-            <button className="secondary-button" type="button" onClick={() => setPreviewMode('points')}>
-              Switch to Point Preview
-            </button>
-          ) : null}
-          {previewMode === 'sampled-triangles' ? (
-            <p className="status status-warning">Sampled Triangles is experimental and may look shredded because it is not a decimated surface.</p>
-          ) : null}
-          {previewQuality === 'full' && previewMode === 'sampled-triangles' ? (
-            <p className="status status-warning">Full mode renders every triangle and can be slow on large meshes.</p>
-          ) : null}
-          {sampledFullPreviewBlocked ? (
-            <button className="secondary-button" type="button" onClick={() => setPreviewMode('points')}>
-              Switch to Point Preview
-            </button>
-          ) : null}
-          <label className="checkbox-row">
-            <input type="checkbox" checked={orbitEnabled} onChange={(event) => setOrbitEnabled(event.target.checked)} />
-            <span>Enable orbit controls</span>
-          </label>
-        </section>
-
-        <section className="panel-section">
           <div className="section-row">
             <h2>Palette</h2>
-            <select value={materialCount} onChange={(event) => {
-              setStatus('Assigning materials...');
-              setMaterialCount(Number(event.target.value));
-            }}>
+            <select value={materialCount} onChange={(event) => setMaterialCount(Number(event.target.value))}>
               {Array.from({ length: 7 }, (_, index) => index + 2).map((count) => (
                 <option key={count} value={count}>{count} materials</option>
               ))}
@@ -546,17 +340,11 @@ export default function App() {
           <div className="endpoint-grid">
             <label className="field">
               <span>Material 1 highlight</span>
-              <input type="color" value={highlightColor} onChange={(event) => {
-                setStatus('Assigning materials...');
-                setHighlightColor(event.target.value);
-              }} />
+              <input type="color" value={highlightColor} onChange={(event) => setHighlightColor(event.target.value)} />
             </label>
             <label className="field">
               <span>Material 2 shadow</span>
-              <input type="color" value={shadowColor} onChange={(event) => {
-                setStatus('Assigning materials...');
-                setShadowColor(event.target.value);
-              }} />
+              <input type="color" value={shadowColor} onChange={(event) => setShadowColor(event.target.value)} />
             </label>
           </div>
           <div className="swatch-list">
@@ -573,31 +361,19 @@ export default function App() {
         <section className="panel-section">
           <h2>Assignment</h2>
           <div className="segmented-control">
-            <button className={mode === 'directional' ? 'active' : ''} type="button" onClick={() => {
-              setStatus('Assigning materials...');
-              setMode('directional');
-            }}>Light</button>
-            <button className={mode === 'height' ? 'active' : ''} type="button" onClick={() => {
-              setStatus('Assigning materials...');
-              setMode('height');
-            }}>Height</button>
+            <button className={mode === 'directional' ? 'active' : ''} type="button" onClick={() => setMode('directional')}>Light</button>
+            <button className={mode === 'height' ? 'active' : ''} type="button" onClick={() => setMode('height')}>Axis</button>
           </div>
 
           {mode === 'directional' ? (
             <LightDirectionControls
               lightDirection={lightDirection}
-              onLightDirectionChange={(direction) => {
-                setStatus('Assigning materials...');
-                setLightDirection(direction);
-              }}
+              onLightDirectionChange={setLightDirection}
             />
           ) : (
             <label className="field">
               <span>Axis</span>
-              <select value={axis} onChange={(event) => {
-                setStatus('Assigning materials...');
-                setAxis(event.target.value as Axis);
-              }}>
+              <select value={axis} onChange={(event) => setAxis(event.target.value as Axis)}>
                 <option value="z">Z</option>
                 <option value="y">Y</option>
                 <option value="x">X</option>
@@ -609,23 +385,34 @@ export default function App() {
         <section className="panel-section">
           <h2>Export</h2>
           <button className="primary-button" type="button" onClick={handleExport} disabled={!originalMesh || isProcessing}>
-            Export 3MF
+            {isExporting ? 'Exporting...' : 'Export 3MF'}
           </button>
           <p className="helper-copy">Face material indices follow the palette order shown above.</p>
         </section>
       </aside>
 
       <PreviewViewport
-        originalFaceCount={originalMesh?.faceCount ?? 0}
-        originalMesh={originalMesh}
-        previewMesh={previewMesh}
-        assignments={assignments}
+        mesh={originalMesh}
         palette={palette}
-        previewMode={previewMode}
-        orbitEnabled={orbitEnabled}
-        pointSize={pointSize}
         lightDirection={lightDirection}
+        mode={mode}
+        axis={axis}
       />
+
+      {isProcessing ? (
+        <div className="loading-overlay" role="status" aria-live="polite">
+          <div className="loading-card">
+            <div className="spinner" aria-hidden="true" />
+            <p>{status}</p>
+          </div>
+        </div>
+      ) : null}
+
+      {isDragging ? (
+        <div className="drop-overlay" aria-hidden="true">
+          <div className="drop-card">Drop STL or OBJ to load</div>
+        </div>
+      ) : null}
     </main>
   );
 }
