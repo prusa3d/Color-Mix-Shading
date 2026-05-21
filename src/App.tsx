@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent } from 'react';
 import { exportMeshAsThreeMf } from './lib/export/threeMf';
 import { computeAssignments } from './lib/materials/assignMaterials';
 import { parseMeshFile } from './lib/mesh/parseMesh';
@@ -242,15 +242,19 @@ export default function App() {
       setStatus('Building preview...');
       await new Promise((resolve) => window.setTimeout(resolve, 0));
       setOriginalMesh(parsedMesh);
-      setStatus(`Ready - ${parsedMesh.faceCount.toLocaleString()} faces`);
+      // isProcessing stays true until ShadedMesh signals via handleMeshLoaded.
     } catch (caughtError) {
       setOriginalMesh(null);
       setError(caughtError instanceof Error ? caughtError.message : 'The mesh could not be parsed.');
       setStatus('Import failed.');
-    } finally {
       setIsProcessing(false);
     }
   };
+
+  const handleMeshLoaded = useCallback((mesh: ParsedMesh) => {
+    setStatus(`Ready - ${mesh.faceCount.toLocaleString()} faces`);
+    setIsProcessing(false);
+  }, []);
 
   useEffect(() => {
     const handleDragEnter = (event: DragEvent) => {
@@ -516,6 +520,7 @@ export default function App() {
         mode={mode}
         axis={axis}
         secondLight={secondLightColor !== null ? { direction: secondLightDirection, color: secondLightColor } : null}
+        onMeshLoaded={handleMeshLoaded}
       />
 
       {isProcessing ? (

@@ -16,6 +16,7 @@ type PreviewViewportProps = {
   mode: AssignmentMode;
   axis: Axis;
   secondLight: SecondLight;
+  onMeshLoaded?: (mesh: ParsedMesh) => void;
 };
 
 const AXIS_INDEX: Record<Axis, number> = { x: 0, y: 1, z: 2 };
@@ -204,6 +205,7 @@ function ShadedMesh({
   heightMin,
   heightMax,
   secondLight,
+  onMeshLoaded,
 }: {
   mesh: ParsedMesh;
   palette: PaletteMaterial[];
@@ -213,6 +215,7 @@ function ShadedMesh({
   heightMin: number;
   heightMax: number;
   secondLight: SecondLight;
+  onMeshLoaded?: (mesh: ParsedMesh) => void;
 }) {
   const invalidate = useThree((state) => state.invalidate);
   const geometry = useMemo(() => createSurfaceGeometry(mesh), [mesh]);
@@ -222,6 +225,23 @@ function ShadedMesh({
     updateShadingUniforms(material, { lightDirection, palette, mode, axis, heightMin, heightMax, secondLight });
     invalidate();
   }, [axis, heightMax, heightMin, invalidate, lightDirection, material, mode, palette, secondLight]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const firstFrame = requestAnimationFrame(() => {
+      if (cancelled) return;
+      const secondFrame = requestAnimationFrame(() => {
+        if (cancelled) return;
+        onMeshLoaded?.(mesh);
+      });
+      cancelHandle.id = secondFrame;
+    });
+    const cancelHandle = { id: firstFrame };
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(cancelHandle.id);
+    };
+  }, [mesh, onMeshLoaded]);
 
   useEffect(() => () => {
     geometry.dispose();
@@ -296,6 +316,7 @@ export function PreviewViewport({
   mode,
   axis,
   secondLight,
+  onMeshLoaded,
 }: PreviewViewportProps) {
   const [cameraView, setCameraView] = useState<CameraView>('iso');
   const orbitControls = useRef<OrbitControlsImpl | null>(null);
@@ -347,6 +368,7 @@ export function PreviewViewport({
               heightMin={heightRange.min}
               heightMax={heightRange.max}
               secondLight={secondLight}
+              onMeshLoaded={onMeshLoaded}
             />
             {mode === 'directional' ? (
               <>
