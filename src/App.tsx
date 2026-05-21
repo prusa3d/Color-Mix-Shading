@@ -4,9 +4,14 @@ import { computeAssignments } from './lib/materials/assignMaterials';
 import { parseMeshFile } from './lib/mesh/parseMesh';
 import { normalize } from './lib/mesh/vector';
 import { PreviewViewport } from './components/PreviewViewport';
+import { mixFilamentsCached } from './lib/preview/mixCache';
 import type { AssignmentMode, Axis, PaletteMaterial, ParsedMesh, Vec3 } from './types/mesh';
 
+const MIXED_STEPS = 11;
+
 const DEFAULT_LIGHT: Vec3 = [0.35, 0.45, 0.82];
+const DEFAULT_SECOND_LIGHT: Vec3 = [-0.55, -0.35, 0.75];
+const DEFAULT_SECOND_LIGHT_COLOR = '#3B82F6';
 const DEFAULT_HIGHLIGHT = '#F8D36B';
 const DEFAULT_SHADOW = '#6C2A00';
 const LIGHT_PRESETS: Array<{ name: string; direction: Vec3 }> = [
@@ -183,9 +188,11 @@ export default function App() {
   const [mode, setMode] = useState<AssignmentMode>('directional');
   const [axis, setAxis] = useState<Axis>('z');
   const [lightDirection, setLightDirection] = useState<Vec3>(DEFAULT_LIGHT);
+  const [secondLightDirection, setSecondLightDirection] = useState<Vec3>(DEFAULT_SECOND_LIGHT);
+  const [secondLightColor, setSecondLightColor] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [status, setStatus] = useState<string>('Ready for STL or OBJ import.');
+  const [status, setStatus] = useState<string>('Ready for STL, OBJ, or 3MF import.');
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -193,6 +200,29 @@ export default function App() {
     () => createShadingPalette(highlightColor, shadowColor, materialCount),
     [highlightColor, materialCount, shadowColor],
   );
+
+  const mixedPalette = useMemo(() => {
+    if (secondLightColor === null) {
+      return null;
+    }
+    const paletteLen = palette.length;
+    return palette.map((_base, paletteIndex) => {
+      const v1 =
+        paletteIndex === 0 ? 1 : paletteIndex === 1 ? 0 : (paletteIndex - 1) / (paletteLen - 1);
+      return Array.from({ length: MIXED_STEPS }, (_, step) => {
+        const v2 = step / (MIXED_STEPS - 1);
+        const total = v1 + v2;
+        const light1Ratio = total > 1 ? v1 / total : v1;
+        const light2Ratio = total > 1 ? v2 / total : v2;
+        const shadowRatio = total > 1 ? 0 : 1 - total;
+        return mixFilamentsCached([
+          { hex: highlightColor, ratio: light1Ratio },
+          { hex: shadowColor, ratio: shadowRatio },
+          { hex: secondLightColor, ratio: light2Ratio },
+        ]).hex;
+      });
+    });
+  }, [palette, secondLightColor, shadowColor, highlightColor]);
 
   const isProcessingRef = useRef(isProcessing);
   isProcessingRef.current = isProcessing;
@@ -322,8 +352,8 @@ export default function App() {
         <section className="panel-section">
           <h2>Import</h2>
           <label className="file-drop">
-            <input type="file" accept=".stl,.obj,model/stl,text/plain" onChange={handleFileUpload} disabled={isProcessing} />
-            <span>Choose STL or OBJ - or drop one on the window</span>
+            <input type="file" accept=".stl,.obj,.3mf,model/stl,model/3mf,text/plain" onChange={handleFileUpload} disabled={isProcessing} />
+            <span>Choose STL, OBJ, or 3MF - or drop one on the window</span>
           </label>
           <p className={error ? 'status status-error' : 'status'}>{error ?? status}</p>
         </section>
@@ -332,9 +362,12 @@ export default function App() {
           <div className="section-row">
             <h2>Palette</h2>
             <select value={materialCount} onChange={(event) => setMaterialCount(Number(event.target.value))}>
-              {Array.from({ length: 7 }, (_, index) => index + 2).map((count) => (
-                <option key={count} value={count}>{count} materials</option>
-              ))}
+              {Array.from({ length: 7 }, (_, index) => index + 2).map((count) => {
+                const steps = count - 2;
+                return (
+                  <option key={count} value={count}>{steps} mix step{steps === 1 ? '' : 's'}</option>
+                );
+              })}
             </select>
           </div>
           <div className="endpoint-grid">
@@ -356,20 +389,100 @@ export default function App() {
               </div>
             ))}
           </div>
+
+          {mixedPalette ? (
+            <div className="mixed-grid">
+              <h3 className="subsection-heading">Mixed with second light</h3>
+              <div className="mixed-grid-rows">
+                {mixedPalette.map((row, bandIndex) => (
+                  <div className="mixed-row" key={palette[bandIndex].id}>
+                    <span className="material-index">{bandIndex + 1}</span>
+                    <div className="mixed-strip">
+                      {row.map((hex, step) => (
+                        <span
+                          className="mixed-cell"
+                          key={step}
+                          style={{ background: hex }}
+                          title={`${Math.round((step / (MIXED_STEPS - 1)) * 100)}% second light → ${hex}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="helper-copy">Predicted FDM mix per palette band across 0–100% second-light contribution.</p>
+            </div>
+          ) : null}
         </section>
 
         <section className="panel-section">
           <h2>Assignment</h2>
           <div className="segmented-control">
             <button className={mode === 'directional' ? 'active' : ''} type="button" onClick={() => setMode('directional')}>Light</button>
-            <button className={mode === 'height' ? 'active' : ''} type="button" onClick={() => setMode('height')}>Axis</button>
+            <button
+              className={mode === 'height' ? 'active' : ''}
+              type="button"
+              onClick={() => setMode('height')}
+              disabled={secondLightColor !== null}
+              title={secondLightColor !== null ? 'Disable the second light to use axis mapping' : undefined}
+            >
+              Axis
+            </button>
           </div>
 
           {mode === 'directional' ? (
-            <LightDirectionControls
-              lightDirection={lightDirection}
-              onLightDirectionChange={setLightDirection}
-            />
+            <>
+              <LightDirectionControls
+                lightDirection={lightDirection}
+                onLightDirectionChange={setLightDirection}
+              />
+
+              <div className="second-light-block">
+                <div className="section-row">
+                  <h3 className="subsection-heading">Second light</h3>
+                  {secondLightColor === null ? (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        setSecondLightColor(DEFAULT_SECOND_LIGHT_COLOR);
+                        if (mode !== 'directional') {
+                          setMode('directional');
+                        }
+                      }}
+                    >
+                      Add
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => setSecondLightColor(null)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+
+                {secondLightColor !== null ? (
+                  <>
+                    <label className="field">
+                      <span>Tint color</span>
+                      <input
+                        type="color"
+                        value={secondLightColor}
+                        onChange={(event) => setSecondLightColor(event.target.value)}
+                      />
+                    </label>
+                    <LightDirectionControls
+                      lightDirection={secondLightDirection}
+                      onLightDirectionChange={setSecondLightDirection}
+                    />
+                    <p className="helper-copy">Preview only — does not affect 3MF export yet.</p>
+                  </>
+                ) : null}
+              </div>
+            </>
           ) : (
             <label className="field">
               <span>Axis</span>
@@ -397,6 +510,7 @@ export default function App() {
         lightDirection={lightDirection}
         mode={mode}
         axis={axis}
+        secondLight={secondLightColor !== null ? { direction: secondLightDirection, color: secondLightColor } : null}
       />
 
       {isProcessing ? (
@@ -410,7 +524,7 @@ export default function App() {
 
       {isDragging ? (
         <div className="drop-overlay" aria-hidden="true">
-          <div className="drop-card">Drop STL or OBJ to load</div>
+          <div className="drop-card">Drop STL, OBJ, or 3MF to load</div>
         </div>
       ) : null}
     </main>

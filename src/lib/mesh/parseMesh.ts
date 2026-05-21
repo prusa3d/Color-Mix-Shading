@@ -1,6 +1,7 @@
 import type { ParsedMesh } from '../../types/mesh';
 import { parseObj } from './parseObj';
 import { parseStl } from './parseStl';
+import { parseThreeMf } from './parseThreeMf';
 
 export async function parseMeshFile(file: File): Promise<ParsedMesh> {
   const extension = file.name.split('.').pop()?.toLowerCase();
@@ -13,5 +14,9 @@ export async function parseMeshFile(file: File): Promise<ParsedMesh> {
     return parseObj(await file.text(), file.name);
   }
 
-  throw new Error('Please upload an STL or OBJ file.');
+  if (extension === '3mf') {
+    return parseThreeMf(await file.arrayBuffer(), file.name);
+  }
+
+  throw new Error('Please upload an STL, OBJ, or 3MF file.');
 }

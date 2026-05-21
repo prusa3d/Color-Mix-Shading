@@ -7,12 +7,15 @@ import type { AssignmentMode, Axis, PaletteMaterial, ParsedMesh, Vec3 } from '..
 import { createSurfaceGeometry } from '../lib/preview/createPreviewGeometry';
 import { createShadingMaterial, updateShadingUniforms } from '../lib/preview/shadingMaterial';
 
+type SecondLight = { direction: Vec3; color: string } | null;
+
 type PreviewViewportProps = {
   mesh: ParsedMesh | null;
   palette: PaletteMaterial[];
   lightDirection: Vec3;
   mode: AssignmentMode;
   axis: Axis;
+  secondLight: SecondLight;
 };
 
 const AXIS_INDEX: Record<Axis, number> = { x: 0, y: 1, z: 2 };
@@ -200,6 +203,7 @@ function ShadedMesh({
   axis,
   heightMin,
   heightMax,
+  secondLight,
 }: {
   mesh: ParsedMesh;
   palette: PaletteMaterial[];
@@ -208,15 +212,16 @@ function ShadedMesh({
   axis: Axis;
   heightMin: number;
   heightMax: number;
+  secondLight: SecondLight;
 }) {
   const invalidate = useThree((state) => state.invalidate);
   const geometry = useMemo(() => createSurfaceGeometry(mesh), [mesh]);
   const material = useMemo(() => createShadingMaterial(), []);
 
   useEffect(() => {
-    updateShadingUniforms(material, { lightDirection, palette, mode, axis, heightMin, heightMax });
+    updateShadingUniforms(material, { lightDirection, palette, mode, axis, heightMin, heightMax, secondLight });
     invalidate();
-  }, [axis, heightMax, heightMin, invalidate, lightDirection, material, mode, palette]);
+  }, [axis, heightMax, heightMin, invalidate, lightDirection, material, mode, palette, secondLight]);
 
   useEffect(() => () => {
     geometry.dispose();
@@ -232,9 +237,11 @@ function ShadedMesh({
 function LightDirectionHelper({
   bounds,
   lightDirection,
+  color,
 }: {
   bounds: MeshBounds | null;
   lightDirection: Vec3;
+  color: string;
 }) {
   const lightVector = useMemo(() => new Vector3(lightDirection[0], lightDirection[1], lightDirection[2]).normalize(), [lightDirection]);
   const geometry = useMemo(() => {
@@ -243,14 +250,14 @@ function LightDirectionHelper({
     const sunPosition = center.clone().addScaledVector(lightVector, distance);
     return new BufferGeometry().setFromPoints([sunPosition, center]);
   }, [bounds, lightVector]);
-  const lineMaterial = useMemo(() => new LineBasicMaterial({ color: '#f59e0b', depthTest: false, depthWrite: false }), []);
+  const lineMaterial = useMemo(() => new LineBasicMaterial({ color, depthTest: false, depthWrite: false }), [color]);
   const line = useMemo(() => {
     const nextLine = new Line(geometry, lineMaterial);
     nextLine.renderOrder = 10;
     return nextLine;
   }, [geometry, lineMaterial]);
-  const sunMaterial = useMemo(() => new MeshBasicMaterial({ color: '#fbbf24', depthTest: false, depthWrite: false }), []);
-  const arrowMaterial = useMemo(() => new MeshBasicMaterial({ color: '#f59e0b', depthTest: false, depthWrite: false }), []);
+  const sunMaterial = useMemo(() => new MeshBasicMaterial({ color, depthTest: false, depthWrite: false }), [color]);
+  const arrowMaterial = useMemo(() => new MeshBasicMaterial({ color, depthTest: false, depthWrite: false }), [color]);
   const helperScale = (bounds?.maxDimension ?? MIN_VIEW_SIZE) * 0.035 + MIN_VIEW_SIZE * 0.025;
   const center = bounds?.center ?? new Vector3();
   const helperDistance = (bounds?.maxDimension ?? MIN_VIEW_SIZE) * 0.85 + MIN_VIEW_SIZE * 0.35;
@@ -288,6 +295,7 @@ export function PreviewViewport({
   lightDirection,
   mode,
   axis,
+  secondLight,
 }: PreviewViewportProps) {
   const [cameraView, setCameraView] = useState<CameraView>('iso');
   const orbitControls = useRef<OrbitControlsImpl | null>(null);
@@ -303,7 +311,8 @@ export function PreviewViewport({
     const max = center + half;
     return min === max ? { min, max: min + 1 } : { min, max };
   }, [axis, bounds]);
-  const renderVersion = `${cameraView}-${mesh?.faceCount ?? 0}-${palette.map((item) => item.color).join('|')}-${lightDirection.join(',')}-${mode}-${axis}`;
+  const secondLightKey = secondLight ? `${secondLight.color}-${secondLight.direction.join(',')}` : 'off';
+  const renderVersion = `${cameraView}-${mesh?.faceCount ?? 0}-${palette.map((item) => item.color).join('|')}-${lightDirection.join(',')}-${mode}-${axis}-${secondLightKey}`;
 
   return (
     <section className="viewport-panel">
@@ -337,9 +346,23 @@ export function PreviewViewport({
               axis={axis}
               heightMin={heightRange.min}
               heightMax={heightRange.max}
+              secondLight={secondLight}
             />
             {mode === 'directional' ? (
-              <LightDirectionHelper bounds={bounds} lightDirection={lightDirection} />
+              <>
+                <LightDirectionHelper
+                  bounds={bounds}
+                  lightDirection={lightDirection}
+                  color={palette[0]?.color ?? '#f59e0b'}
+                />
+                {secondLight ? (
+                  <LightDirectionHelper
+                    bounds={bounds}
+                    lightDirection={secondLight.direction}
+                    color={secondLight.color}
+                  />
+                ) : null}
+              </>
             ) : null}
             <OrbitControls ref={orbitControls} makeDefault enableDamping={false} />
             <PresetCameraRig bounds={bounds} cameraView={cameraView} orbitControls={orbitControls} />
