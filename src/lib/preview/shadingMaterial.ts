@@ -3,9 +3,8 @@ import type { AssignmentMode, Axis, PaletteMaterial, Vec3 } from '../../types/me
 import { mixFilamentsCached } from './mixCache';
 
 const MAX_PALETTE = 8;
-const MIX_BINS = 16;
-const MIX_STEPS = MIX_BINS + 1;
-const MIX_LUT_SIZE = MAX_PALETTE * MIX_STEPS;
+const MIX_STRIDE = MAX_PALETTE;
+const MIX_LUT_SIZE = MAX_PALETTE * MIX_STRIDE;
 const AXIS_INDEX: Record<Axis, number> = { x: 0, y: 1, z: 2 };
 
 const VERTEX_SHADER = /* glsl */ `
@@ -71,8 +70,8 @@ void main() {
 
   if (uHasSecondLight == 1) {
     float v2 = max(0.0, dot(N, normalize(uLightDir2)));
-    int band2 = int(clamp(floor(v2 * float(${MIX_STEPS})), 0.0, float(${MIX_STEPS - 1})));
-    int lutIndex = band * ${MIX_STEPS} + band2;
+    int band2 = int(clamp(floor(v2 * fmc), 0.0, fmc - 1.0));
+    int lutIndex = band * ${MIX_STRIDE} + band2;
     vec3 mixed = uMixLut[0];
     for (int i = 0; i < ${MIX_LUT_SIZE}; i++) {
       if (i == lutIndex) mixed = uMixLut[i];
@@ -153,8 +152,8 @@ export function updateShadingUniforms(material: ShaderMaterial, params: ShadingP
     const shadowHex = params.palette[1].color;
     for (let band1 = 0; band1 < paletteLen; band1 += 1) {
       const v1 = paletteLen > 1 ? band1 / (paletteLen - 1) : 0;
-      for (let band2 = 0; band2 < MIX_STEPS; band2 += 1) {
-        const v2 = band2 / (MIX_STEPS - 1);
+      for (let band2 = 0; band2 < paletteLen; band2 += 1) {
+        const v2 = paletteLen > 1 ? band2 / (paletteLen - 1) : 0;
         const total = v1 + v2;
         const light1Ratio = total > 1 ? v1 / total : v1;
         const light2Ratio = total > 1 ? v2 / total : v2;
@@ -167,7 +166,7 @@ export function updateShadingUniforms(material: ShaderMaterial, params: ShadingP
         const r = Math.min(1, Math.max(0, mixed.rgb.r / 255));
         const g = Math.min(1, Math.max(0, mixed.rgb.g / 255));
         const b = Math.min(1, Math.max(0, mixed.rgb.b / 255));
-        lutSlots[band1 * MIX_STEPS + band2].set(r, g, b);
+        lutSlots[band1 * MIX_STRIDE + band2].set(r, g, b);
       }
     }
   } else {

@@ -373,7 +373,6 @@ select {
 
 .mixed-strip {
   display: grid;
-  grid-template-columns: repeat(11, minmax(0, 1fr));
   height: 24px;
   border: 1px solid #b8c5d4;
 }

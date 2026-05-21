@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "Bash(npm install *)",
+      "Bash(git *)",
+      "Bash(gh auth *)",
+      "Bash(gh api *)",
+      "Bash(cp /Users/bartas/local_work/prusa3d/vibecoding/prusa-fdm-mixer/src/prusa-fdm-mixer.ts /Users/bartas/local_work/prusa3d/vibecoding/prusa-fdm-mixer/src/yule-nielsen.ts /Users/bartas/local_work/prusa3d/vibecoding/prusa-fdm-mixer/src/color.ts /Users/bartas/local_work/prusa3d/vibecoding/Color-Mix-Shading/src/lib/fdm-mixer/)",
+      "Bash(cp /Users/bartas/local_work/prusa3d/vibecoding/prusa-fdm-mixer/LICENSE /Users/bartas/local_work/prusa3d/vibecoding/Color-Mix-Shading/src/lib/fdm-mixer/LICENSE)"
+    ]
+  }
+}

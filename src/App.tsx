@@ -7,7 +7,6 @@ import { PreviewViewport } from './components/PreviewViewport';
 import { mixFilamentsCached } from './lib/preview/mixCache';
 import type { AssignmentMode, Axis, PaletteMaterial, ParsedMesh, Vec3 } from './types/mesh';
 
-const MIXED_STEPS = 11;
 
 const DEFAULT_LIGHT: Vec3 = [0.35, 0.45, 0.82];
 const DEFAULT_SECOND_LIGHT: Vec3 = [-0.55, -0.35, 0.75];
@@ -209,8 +208,8 @@ export default function App() {
     return palette.map((_base, paletteIndex) => {
       const v1 =
         paletteIndex === 0 ? 1 : paletteIndex === 1 ? 0 : (paletteIndex - 1) / (paletteLen - 1);
-      return Array.from({ length: MIXED_STEPS }, (_, step) => {
-        const v2 = step / (MIXED_STEPS - 1);
+      return Array.from({ length: paletteLen }, (_, step) => {
+        const v2 = paletteLen > 1 ? step / (paletteLen - 1) : 0;
         const total = v1 + v2;
         const light1Ratio = total > 1 ? v1 / total : v1;
         const light2Ratio = total > 1 ? v2 / total : v2;
@@ -380,39 +379,45 @@ export default function App() {
               <input type="color" value={shadowColor} onChange={(event) => setShadowColor(event.target.value)} />
             </label>
           </div>
-          <div className="swatch-list">
-            {palette.map((material, index) => (
-              <div className="swatch-row" key={material.id}>
-                <span className="material-index">{index + 1}</span>
-                <span className="swatch-chip" style={{ background: material.color }} />
-                <span>{material.name}</span>
-              </div>
-            ))}
-          </div>
-
-          {mixedPalette ? (
-            <div className="mixed-grid">
-              <h3 className="subsection-heading">Mixed with second light</h3>
-              <div className="mixed-grid-rows">
-                {mixedPalette.map((row, bandIndex) => (
-                  <div className="mixed-row" key={palette[bandIndex].id}>
-                    <span className="material-index">{bandIndex + 1}</span>
-                    <div className="mixed-strip">
-                      {row.map((hex, step) => (
-                        <span
-                          className="mixed-cell"
-                          key={step}
-                          style={{ background: hex }}
-                          title={`${Math.round((step / (MIXED_STEPS - 1)) * 100)}% second light → ${hex}`}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <p className="helper-copy">Predicted FDM mix per palette band across 0–100% second-light contribution.</p>
+          {mixedPalette === null ? (
+            <div className="swatch-list">
+              {palette.map((material, index) => (
+                <div className="swatch-row" key={material.id}>
+                  <span className="material-index">{index + 1}</span>
+                  <span className="swatch-chip" style={{ background: material.color }} />
+                  <span>{material.name}</span>
+                </div>
+              ))}
             </div>
-          ) : null}
+          ) : (
+            <div className="mixed-grid">
+              <h3 className="subsection-heading">Predicted FDM mixes</h3>
+              <div className="mixed-grid-rows">
+                {mixedPalette.map((row, bandIndex) => {
+                  const cols = row.length;
+                  return (
+                    <div className="mixed-row" key={palette[bandIndex].id}>
+                      <span className="material-index">{bandIndex + 1}</span>
+                      <div
+                        className="mixed-strip"
+                        style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+                      >
+                        {row.map((hex, step) => (
+                          <span
+                            className="mixed-cell"
+                            key={step}
+                            style={{ background: hex }}
+                            title={`${cols > 1 ? Math.round((step / (cols - 1)) * 100) : 0}% second light → ${hex}`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="helper-copy">Rows: light 1 intensity. Columns: light 2 intensity. Bin count follows mix steps.</p>
+            </div>
+          )}
         </section>
 
         <section className="panel-section">
