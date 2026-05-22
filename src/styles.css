@@ -415,6 +415,58 @@ select {
   opacity: 0.58;
 }
 
+.easyprint-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 18px;
+  background: #fff;
+  color: #1a1a1a;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.easyprint-button:hover:not(:disabled) {
+  border-color: #c5c9d0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.easyprint-button:active:not(:disabled) {
+  background: #f7f7f9;
+}
+
+.easyprint-button:focus-visible {
+  outline: 2px solid #fd5000;
+  outline-offset: 2px;
+}
+
+.easyprint-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.easyprint-button__label {
+  letter-spacing: 0.01em;
+}
+
+.easyprint-button__logo {
+  height: 22px;
+  width: auto;
+  display: block;
+}
+
 .checkbox-row {
   display: flex;
   align-items: center;

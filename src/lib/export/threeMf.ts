@@ -182,11 +182,11 @@ function createRootRelationshipsXml(): string {
 </Relationships>`;
 }
 
-export async function exportMeshAsThreeMf(
+export async function buildThreeMfBlob(
   mesh: ParsedMesh,
   assignments: Uint8Array,
   materials: MaterialRecipe[],
-): Promise<{ fileName: string; materialCount: number }> {
+): Promise<{ blob: Blob; fileName: string; materialCount: number }> {
   const zip = new JSZip();
   const fileName = `${slugifyFileName(mesh.name)}-color-mix.3mf`;
 
@@ -198,7 +198,17 @@ export async function exportMeshAsThreeMf(
   zip.file('Metadata/Slic3r_PE_model.config', createSlic3rPeModelConfig(mesh));
 
   const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
-  saveAs(new Blob([zipBlob], { type: 'model/3mf' }), fileName);
+  const blob = new Blob([zipBlob], { type: 'model/3mf' });
 
-  return { fileName, materialCount: materials.length };
+  return { blob, fileName, materialCount: materials.length };
+}
+
+export async function exportMeshAsThreeMf(
+  mesh: ParsedMesh,
+  assignments: Uint8Array,
+  materials: MaterialRecipe[],
+): Promise<{ fileName: string; materialCount: number }> {
+  const { blob, fileName, materialCount } = await buildThreeMfBlob(mesh, assignments, materials);
+  saveAs(blob, fileName);
+  return { fileName, materialCount };
 }

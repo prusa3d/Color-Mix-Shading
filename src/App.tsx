@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent } from 'react';
-import { exportMeshAsThreeMf } from './lib/export/threeMf';
+import { saveAs } from 'file-saver';
+import { buildThreeMfBlob } from './lib/export/threeMf';
+import { openInEasyPrint } from './lib/export/easyprint';
 import { computeAssignments } from './lib/materials/assignMaterials';
 import { parseMeshFile } from './lib/mesh/parseMesh';
 import { normalize } from './lib/mesh/vector';
@@ -191,6 +193,7 @@ export default function App() {
   const [secondLightColor, setSecondLightColor] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isSendingToEasyPrint, setIsSendingToEasyPrint] = useState(false);
   const [status, setStatus] = useState<string>('Ready for STL, OBJ, or 3MF import.');
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -315,6 +318,26 @@ export default function App() {
     event.target.value = '';
   };
 
+  const prepareThreeMfBlob = async () => {
+    if (!originalMesh) {
+      return null;
+    }
+
+    const { assignments, materials } = await computeAssignments(originalMesh, {
+      mode,
+      lightDirection,
+      axis,
+      materialCount,
+      palette,
+      secondLight:
+        secondLightColor !== null
+          ? { direction: secondLightDirection, color: secondLightColor }
+          : null,
+    });
+    setStatus('Packaging 3MF...');
+    return buildThreeMfBlob(originalMesh, assignments, materials);
+  };
+
   const handleExport = async () => {
     if (!originalMesh) {
       return;
@@ -326,19 +349,11 @@ export default function App() {
     setStatus('Computing material assignments...');
 
     try {
-      const { assignments, materials } = await computeAssignments(originalMesh, {
-        mode,
-        lightDirection,
-        axis,
-        materialCount,
-        palette,
-        secondLight:
-          secondLightColor !== null
-            ? { direction: secondLightDirection, color: secondLightColor }
-            : null,
-      });
-      setStatus('Packaging 3MF...');
-      const result = await exportMeshAsThreeMf(originalMesh, assignments, materials);
+      const result = await prepareThreeMfBlob();
+      if (!result) {
+        return;
+      }
+      saveAs(result.blob, result.fileName);
       setStatus(`Exported ${result.fileName} with ${result.materialCount} materials.`);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '3MF export failed.');
@@ -346,6 +361,39 @@ export default function App() {
     } finally {
       setIsProcessing(false);
       setIsExporting(false);
+    }
+  };
+
+  const handlePrintWithEasyPrint = async () => {
+    if (!originalMesh) {
+      return;
+    }
+
+    setIsProcessing(true);
+    setIsSendingToEasyPrint(true);
+    setError(null);
+    setStatus('Computing material assignments...');
+
+    try {
+      const result = await prepareThreeMfBlob();
+      if (!result) {
+        return;
+      }
+      setStatus('Sending to EasyPrint...');
+      openInEasyPrint(result.blob, result.fileName, {
+        sourceName: 'Color Mix Shading',
+        sourceUrl: window.location.href,
+        target: 'blank',
+      });
+      setStatus(`Opened ${result.fileName} in EasyPrint.`);
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'Failed to send to EasyPrint.',
+      );
+      setStatus('EasyPrint hand-off failed.');
+    } finally {
+      setIsProcessing(false);
+      setIsSendingToEasyPrint(false);
     }
   };
 
@@ -512,6 +560,42 @@ export default function App() {
           <h2>Export</h2>
           <button className="primary-button" type="button" onClick={handleExport} disabled={!originalMesh || isProcessing}>
             {isExporting ? 'Exporting...' : 'Export 3MF'}
+          </button>
+          <button
+            className="easyprint-button"
+            type="button"
+            onClick={handlePrintWithEasyPrint}
+            disabled={!originalMesh || isProcessing}
+          >
+            <span className="easyprint-button__label">
+              {isSendingToEasyPrint ? 'Sending...' : 'Print with'}
+            </span>
+            {isSendingToEasyPrint ? null : (
+              <svg
+                className="easyprint-button__logo"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 406.37 83.99"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <g fill="#fd5000">
+                  <polygon points="72.66 16.8 43.59 .01 14.52 16.8 14.52 50.36 43.59 33.58 72.66 16.8" />
+                  <polygon points="0 67.2 29.08 83.98 58.15 67.2 58.15 33.63 29.08 50.41 0 67.2" />
+                </g>
+                <g fill="#121212">
+                  <polygon points="92.02 67.2 127.3 67.2 127.3 55.1 105.34 55.1 105.34 47.76 125.86 47.76 125.86 36.24 105.34 36.24 105.34 28.82 127.3 28.82 127.3 16.8 92.02 16.8 92.02 67.2" />
+                  <path d="M158.73,30.94c-2.59-1.27-5.64-1.91-9.14-1.91-3.26,0-6.12.58-8.57,1.73-2.45,1.15-4.36,2.69-5.72,4.61-1.37,1.92-2.17,4.01-2.41,6.26h12.02c.82-1.82,2.38-2.74,4.68-2.74,1.34,0,2.47.44,3.38,1.33.91.89,1.37,2.03,1.37,3.42v.65h-7.85c-4.9,0-8.64,1.12-11.23,3.35-2.59,2.23-3.89,5.17-3.89,8.82,0,2.16.54,4.1,1.62,5.83,1.08,1.73,2.65,3.1,4.72,4.1,2.06,1.01,4.49,1.51,7.27,1.51,2.21,0,4.19-.37,5.94-1.12,1.75-.74,3.01-1.57,3.78-2.48h.36l.72,2.88h11.02v-23.54c0-2.78-.7-5.28-2.09-7.49-1.39-2.21-3.38-3.95-5.98-5.22ZM154.34,52.72c0,1.78-.55,3.18-1.66,4.21s-2.62,1.55-4.54,1.55c-1.39,0-2.45-.29-3.17-.86s-1.08-1.37-1.08-2.38.38-1.73,1.15-2.3c.77-.58,1.92-.86,3.46-.86h5.83v.65Z" />
+                  <path d="M192.07,43.94l-5.4-.79c-2.35-.33-3.53-1.15-3.53-2.45,0-.72.38-1.34,1.15-1.87.77-.53,1.87-.79,3.31-.79,1.58,0,2.79.3,3.64.9.84.6,1.26,1.38,1.26,2.34h12.1c0-2.06-.65-4.06-1.94-5.98-1.3-1.92-3.23-3.48-5.8-4.68-2.57-1.2-5.65-1.8-9.25-1.8s-6.59.54-9.11,1.62c-2.52,1.08-4.42,2.54-5.69,4.39-1.27,1.85-1.91,3.9-1.91,6.16,0,3.12,1.09,5.66,3.28,7.63,2.18,1.97,5.46,3.29,9.83,3.96l5.26.79c1.34.19,2.28.52,2.81.97.53.46.79,1.09.79,1.91,0,.77-.41,1.4-1.22,1.91s-2.04.76-3.67.76c-1.78,0-3.08-.31-3.92-.94-.84-.62-1.26-1.44-1.26-2.45h-12.17c0,1.97.61,3.91,1.84,5.83,1.22,1.92,3.14,3.53,5.76,4.82,2.62,1.3,5.87,1.94,9.76,1.94s6.83-.54,9.4-1.62c2.57-1.08,4.49-2.54,5.76-4.39,1.27-1.85,1.91-3.88,1.91-6.08,0-6.77-4.32-10.8-12.96-12.1Z" />
+                  <path d="M226.64,51.07h-1.44l-7.63-21.31h-13.32l14.83,38.52-.29.65c-.38.82-1.08,1.22-2.09,1.22h-7.63v11.45h10.8c3.12,0,5.5-.61,7.13-1.84,1.63-1.22,2.93-3.18,3.89-5.87l15.77-44.14h-13.32l-6.7,21.31Z" />
+                  <path d="M282.18,19.03c-2.62-1.49-5.63-2.23-9.04-2.23h-23.9v50.4h13.32v-14.04h10.58c3.41,0,6.42-.74,9.04-2.23,2.62-1.49,4.64-3.61,6.08-6.37,1.44-2.76,2.16-5.96,2.16-9.61s-.72-6.84-2.16-9.58c-1.44-2.74-3.47-4.85-6.08-6.34ZM275.73,38.86c-.91.98-2.06,1.48-3.46,1.48h-9.72v-10.8h9.72c1.39,0,2.54.5,3.46,1.51.91,1.01,1.37,2.3,1.37,3.89s-.46,2.94-1.37,3.92Z" />
+                  <path d="M308.51,30.55c-1.18.53-2.03,1.15-2.56,1.87h-.36l-.72-2.66h-10.94v37.44h12.46v-19.22c0-4.42,2.11-6.62,6.34-6.62h6.48v-11.59h-6.77c-1.44,0-2.75.26-3.92.79Z" />
+                  <rect x="321.83" y="14.64" width="12.74" height="10.08" />
+                  <rect x="321.97" y="29.76" width="12.46" height="37.44" />
+                  <path d="M370.08,30.91c-2.16-1.25-4.66-1.87-7.49-1.87-2.3,0-4.32.37-6.05,1.12-1.73.75-3,1.57-3.82,2.48h-.36l-.72-2.88h-10.94v37.44h12.46v-20.23c0-1.73.52-3.14,1.55-4.25,1.03-1.1,2.41-1.66,4.14-1.66s3.11.55,4.14,1.66c1.03,1.11,1.55,2.52,1.55,4.25v20.23h12.46v-22.9c0-3.07-.61-5.76-1.84-8.06s-2.92-4.08-5.08-5.33Z" />
+                  <path d="M406.37,41.35v-11.59h-8.28v-11.45h-12.46v11.45h-5.76v11.59h5.76v14.69c0,3.6,1.01,6.36,3.03,8.28,2.02,1.92,4.97,2.88,8.86,2.88h8.86v-11.38h-5.76c-.91,0-1.56-.19-1.94-.58-.38-.38-.58-1.03-.58-1.94v-11.95h8.28Z" />
+                </g>
+              </svg>
+            )}
           </button>
           <p className="helper-copy">Face material indices follow the palette order shown above.</p>
         </section>
