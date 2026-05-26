@@ -1,13 +1,34 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent } from 'react';
 import { saveAs } from 'file-saver';
 import { buildThreeMfBlob } from './lib/export/threeMf';
-import { openInEasyPrint } from './lib/export/easyprint';
+import {
+  SlicerUploadAbortError,
+  canOpenInPrusaslicer,
+  uploadToSlicer,
+} from './lib/export/slicerUpload';
 import { computeAssignments } from './lib/materials/assignMaterials';
 import { parseMeshFile } from './lib/mesh/parseMesh';
 import { normalize } from './lib/mesh/vector';
 import { PreviewViewport } from './components/PreviewViewport';
+import { UploadModal } from './components/UploadModal';
 import { mixFilamentsCached } from './lib/preview/mixCache';
 import type { AssignmentMode, Axis, PaletteMaterial, ParsedMesh, Vec3 } from './types/mesh';
+
+type SlicerTarget = 'easyprint' | 'prusaslicer';
+
+interface UploadState {
+  target: SlicerTarget;
+  fileName: string;
+  progress: number;
+  status: 'uploading' | 'opening' | 'error';
+  errorMessage?: string;
+  abort: AbortController;
+}
+
+const SLICER_LABEL: Record<SlicerTarget, string> = {
+  easyprint: 'EasyPrint',
+  prusaslicer: 'PrusaSlicer',
+};
 
 
 const DEFAULT_LIGHT: Vec3 = [0.35, 0.45, 0.82];
@@ -193,7 +214,8 @@ export default function App() {
   const [secondLightColor, setSecondLightColor] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [isSendingToEasyPrint, setIsSendingToEasyPrint] = useState(false);
+  const [upload, setUpload] = useState<UploadState | null>(null);
+  const showPrusaSlicerButton = useMemo(() => canOpenInPrusaslicer(), []);
   const [status, setStatus] = useState<string>('Ready for STL, OBJ, or 3MF import.');
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -364,37 +386,94 @@ export default function App() {
     }
   };
 
-  const handlePrintWithEasyPrint = async () => {
-    if (!originalMesh) {
+  const startSlicerUpload = async (target: SlicerTarget) => {
+    if (!originalMesh || upload) {
       return;
     }
 
+    const label = SLICER_LABEL[target];
+
     setIsProcessing(true);
-    setIsSendingToEasyPrint(true);
     setError(null);
     setStatus('Computing material assignments...');
 
+    let blobResult: Awaited<ReturnType<typeof prepareThreeMfBlob>>;
     try {
-      const result = await prepareThreeMfBlob();
-      if (!result) {
-        return;
-      }
-      setStatus('Sending to EasyPrint...');
-      openInEasyPrint(result.blob, result.fileName, {
-        sourceName: 'Color Mix Shading',
-        sourceUrl: window.location.href,
-        target: 'blank',
-      });
-      setStatus(`Opened ${result.fileName} in EasyPrint.`);
+      blobResult = await prepareThreeMfBlob();
     } catch (caughtError) {
       setError(
-        caughtError instanceof Error ? caughtError.message : 'Failed to send to EasyPrint.',
+        caughtError instanceof Error ? caughtError.message : 'Failed to package 3MF.',
       );
-      setStatus('EasyPrint hand-off failed.');
-    } finally {
+      setStatus(`${label} hand-off failed.`);
       setIsProcessing(false);
-      setIsSendingToEasyPrint(false);
+      return;
     }
+    if (!blobResult) {
+      setIsProcessing(false);
+      return;
+    }
+
+    const { blob, fileName } = blobResult;
+    const abort = new AbortController();
+    setUpload({ target, fileName, progress: 0, status: 'uploading', abort });
+    setIsProcessing(false);
+    setStatus(`Uploading to ${label}...`);
+
+    try {
+      const result = await uploadToSlicer(blob, fileName, {
+        sourceName: 'Color Mix Shading',
+        sourceUrl: window.location.href,
+        signal: abort.signal,
+        onProgress: (loaded, total) => {
+          setUpload((current) =>
+            current && current.abort === abort
+              ? { ...current, progress: total > 0 ? loaded / total : 0 }
+              : current,
+          );
+        },
+      });
+
+      setUpload((current) =>
+        current && current.abort === abort
+          ? { ...current, status: 'opening', progress: 1 }
+          : current,
+      );
+
+      if (target === 'easyprint') {
+        window.open(result.easyprintUrl, '_blank', 'noopener,noreferrer');
+      } else {
+        window.location.href = result.prusaslicerUrl;
+      }
+
+      setStatus(`Opened ${fileName} in ${label}.`);
+      setUpload(null);
+    } catch (caughtError) {
+      if (caughtError instanceof SlicerUploadAbortError) {
+        setStatus(`${label} upload cancelled.`);
+        setUpload(null);
+        return;
+      }
+      const message =
+        caughtError instanceof Error ? caughtError.message : `Failed to send to ${label}.`;
+      setError(message);
+      setStatus(`${label} hand-off failed.`);
+      setUpload((current) =>
+        current && current.abort === abort
+          ? { ...current, status: 'error', errorMessage: message }
+          : current,
+      );
+    }
+  };
+
+  const handlePrintWithEasyPrint = () => startSlicerUpload('easyprint');
+  const handlePrintInPrusaSlicer = () => startSlicerUpload('prusaslicer');
+
+  const handleUploadCancel = () => {
+    upload?.abort.abort();
+  };
+
+  const handleUploadClose = () => {
+    setUpload(null);
   };
 
   return (
@@ -558,21 +637,18 @@ export default function App() {
 
         <section className="panel-section">
           <h2>Export</h2>
-          <button className="primary-button" type="button" onClick={handleExport} disabled={!originalMesh || isProcessing}>
+          <button className="primary-button" type="button" onClick={handleExport} disabled={!originalMesh || isProcessing || upload !== null}>
             {isExporting ? 'Exporting...' : 'Export 3MF'}
           </button>
           <button
             className="easyprint-button"
             type="button"
             onClick={handlePrintWithEasyPrint}
-            disabled={!originalMesh || isProcessing}
+            disabled={!originalMesh || isProcessing || upload !== null}
           >
-            <span className="easyprint-button__label">
-              {isSendingToEasyPrint ? 'Sending...' : 'Print with'}
-            </span>
-            {isSendingToEasyPrint ? null : (
-              <svg
-                className="easyprint-button__logo"
+            <span className="easyprint-button__label">Print with</span>
+            <svg
+              className="easyprint-button__logo"
                 xmlns="http://www.w3.org/2000/svg"
                 viewBox="0 0 406.37 83.99"
                 aria-hidden="true"
@@ -595,8 +671,35 @@ export default function App() {
                   <path d="M406.37,41.35v-11.59h-8.28v-11.45h-12.46v11.45h-5.76v11.59h5.76v14.69c0,3.6,1.01,6.36,3.03,8.28,2.02,1.92,4.97,2.88,8.86,2.88h8.86v-11.38h-5.76c-.91,0-1.56-.19-1.94-.58-.38-.38-.58-1.03-.58-1.94v-11.95h8.28Z" />
                 </g>
               </svg>
-            )}
           </button>
+          {showPrusaSlicerButton ? (
+            <button
+              className="prusaslicer-button"
+              type="button"
+              onClick={handlePrintInPrusaSlicer}
+              disabled={!originalMesh || isProcessing || upload !== null}
+            >
+              <svg
+                className="prusaslicer-button__logo"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 800 800"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path
+                  d="m 680.14429,102.36264 c -131.72203,-131.722038 -345.22674,-131.722038 -476.94877,0 -131.722035,131.72203 -131.722035,345.22674 0,476.94877 z"
+                  fill="#363636"
+                />
+                <path
+                  d="m 123.79757,699.53056 c 131.72203,131.72203 345.22674,131.72203 476.94877,0 131.72204,-131.72204 131.72204,-345.22674 0,-476.94877"
+                  fill="#ed6b21"
+                />
+              </svg>
+              <span className="prusaslicer-button__label">
+                Open in <strong>PrusaSlicer</strong>
+              </span>
+            </button>
+          ) : null}
           <p className="helper-copy">Face material indices follow the palette order shown above.</p>
         </section>
       </aside>
@@ -611,7 +714,7 @@ export default function App() {
         onMeshLoaded={handleMeshLoaded}
       />
 
-      {isProcessing ? (
+      {isProcessing && !upload ? (
         <div className="loading-overlay" role="status" aria-live="polite">
           <div className="loading-card">
             <div className="spinner" aria-hidden="true" />
@@ -619,6 +722,17 @@ export default function App() {
           </div>
         </div>
       ) : null}
+
+      <UploadModal
+        open={upload !== null}
+        target={upload?.target ?? 'easyprint'}
+        fileName={upload?.fileName ?? ''}
+        progress={upload?.progress ?? 0}
+        status={upload?.status ?? 'uploading'}
+        errorMessage={upload?.errorMessage}
+        onCancel={handleUploadCancel}
+        onClose={handleUploadClose}
+      />
 
       {isDragging ? (
         <div className="drop-overlay" aria-hidden="true">
