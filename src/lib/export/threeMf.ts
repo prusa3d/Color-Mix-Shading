@@ -2,7 +2,7 @@ import { saveAs } from 'file-saver';
 import JSZip from 'jszip';
 import type { MaterialRecipe, ParsedMesh } from '../../types/mesh';
 import { weldMesh } from '../mesh/weldMesh';
-import { slugifyFileName } from './download';
+import { sanitizeFileNameBase } from './download';
 
 const MODEL_CONTENT_TYPE = 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml';
 const START_PART_RELATIONSHIP = 'http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel';
@@ -188,7 +188,7 @@ export async function buildThreeMfBlob(
   materials: MaterialRecipe[],
 ): Promise<{ blob: Blob; fileName: string; materialCount: number }> {
   const zip = new JSZip();
-  const fileName = `${slugifyFileName(mesh.name)}-color-mix.3mf`;
+  const fileName = `${sanitizeFileNameBase(mesh.originalFileName)}-ColorMixShading.3mf`;
 
   zip.file('[Content_Types].xml', createContentTypesXml());
   zip.file('_rels/.rels', createRootRelationshipsXml());

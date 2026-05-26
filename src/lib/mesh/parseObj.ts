@@ -1,3 +1,4 @@
+import { stripExtension } from '../export/download';
 import type { ParsedMesh, Vec3 } from '../../types/mesh';
 
 function parseObjIndex(token: string, vertexCount: number): number {
@@ -43,5 +44,10 @@ export function parseObj(source: string, name: string): ParsedMesh {
     throw new Error('OBJ did not contain usable vertices and triangular faces.');
   }
 
-  return { name, positions: new Float32Array(positions), faceCount: positions.length / 9 };
+  return {
+    name,
+    originalFileName: stripExtension(name),
+    positions: new Float32Array(positions),
+    faceCount: positions.length / 9,
+  };
 }

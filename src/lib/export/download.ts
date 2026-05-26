@@ -1,7 +1,9 @@
-export function slugifyFileName(name: string): string {
-  return name
-    .replace(/\.[^.]+$/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'color-mix-shading';
+const UNSAFE_FILENAME_CHARS = /[\\/:*?"<>|\x00-\x1f]/g;
+
+export function stripExtension(fileName: string): string {
+  return fileName.replace(/\.[^./\\]+$/, '');
+}
+
+export function sanitizeFileNameBase(name: string): string {
+  return name.replace(UNSAFE_FILENAME_CHARS, '').trim() || 'ColorMixShading';
 }

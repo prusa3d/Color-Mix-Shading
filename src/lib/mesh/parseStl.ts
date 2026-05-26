@@ -1,3 +1,4 @@
+import { stripExtension } from '../export/download';
 import type { ParsedMesh } from '../../types/mesh';
 
 const ASCII_VERTEX_PATTERN = /vertex\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)/gi;
@@ -39,7 +40,7 @@ async function parseBinaryStl(buffer: ArrayBuffer, name: string): Promise<Parsed
     }
   }
 
-  return { name, positions, faceCount: triangleCount };
+  return { name, originalFileName: stripExtension(name), positions, faceCount: triangleCount };
 }
 
 function parseAsciiStl(source: string, name: string): ParsedMesh {
@@ -54,7 +55,12 @@ function parseAsciiStl(source: string, name: string): ParsedMesh {
     throw new Error('ASCII STL did not contain complete triangular facets.');
   }
 
-  return { name, positions: new Float32Array(values), faceCount: values.length / 9 };
+  return {
+    name,
+    originalFileName: stripExtension(name),
+    positions: new Float32Array(values),
+    faceCount: values.length / 9,
+  };
 }
 
 export async function parseStl(buffer: ArrayBuffer, name: string): Promise<ParsedMesh> {

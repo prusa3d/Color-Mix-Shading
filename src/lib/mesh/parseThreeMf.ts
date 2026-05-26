@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import { stripExtension } from '../export/download';
 import type { ParsedMesh, Vec3 } from '../../types/mesh';
 
 type Transform = [number, number, number, number, number, number, number, number, number, number, number, number];
@@ -235,6 +236,7 @@ export async function parseThreeMf(buffer: ArrayBuffer, fileName: string): Promi
   const baseName = firstObjectName?.trim() || fileName;
   return {
     name: baseName,
+    originalFileName: stripExtension(fileName),
     positions: new Float32Array(positions),
     faceCount: positions.length / 9,
   };

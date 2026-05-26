@@ -2,6 +2,7 @@ export type Vec3 = [number, number, number];
 
 export type ParsedMesh = {
   name: string;
+  originalFileName: string;
   positions: Float32Array;
   faceCount: number;
 };
