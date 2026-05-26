@@ -1,5 +1,5 @@
 type UploadTarget = 'easyprint' | 'prusaslicer';
-type UploadStatus = 'uploading' | 'opening' | 'error';
+type UploadStatus = 'uploading' | 'ready' | 'error';
 
 export interface UploadModalProps {
   open: boolean;
@@ -8,6 +8,7 @@ export interface UploadModalProps {
   progress: number;
   status: UploadStatus;
   errorMessage?: string;
+  onLaunch: () => void;
   onCancel: () => void;
   onClose: () => void;
 }
@@ -29,20 +30,22 @@ export function UploadModal({
   progress,
   status,
   errorMessage,
+  onLaunch,
   onCancel,
   onClose,
 }: UploadModalProps) {
   if (!open) return null;
 
   const targetLabel = TARGET_LABEL[target];
-  const indeterminate = progress < 0 || status === 'opening';
-  const clamped = indeterminate ? 0 : Math.max(0, Math.min(1, progress));
+  const indeterminate = progress < 0;
+  const isReady = status === 'ready';
+  const clamped = isReady ? 1 : indeterminate ? 0 : Math.max(0, Math.min(1, progress));
   const dashOffset = RING_CIRCUMFERENCE * (1 - clamped);
-  const percentText = indeterminate ? '' : `${Math.round(clamped * 100)}%`;
+  const percentText = isReady ? '✓' : indeterminate ? '' : `${Math.round(clamped * 100)}%`;
 
   let title: string;
   if (status === 'error') title = `Couldn't reach ${targetLabel}`;
-  else if (status === 'opening') title = `Opening in ${targetLabel}…`;
+  else if (status === 'ready') title = `Ready to open in ${targetLabel}`;
   else title = `Uploading to ${targetLabel}…`;
 
   return (
@@ -105,13 +108,17 @@ export function UploadModal({
             <button type="button" className="secondary-button" onClick={onClose}>
               Close
             </button>
+          ) : status === 'ready' ? (
+            <>
+              <button type="button" className="primary-button" onClick={onLaunch} autoFocus>
+                Open in {targetLabel}
+              </button>
+              <button type="button" className="secondary-button" onClick={onClose}>
+                Cancel
+              </button>
+            </>
           ) : (
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={onCancel}
-              disabled={status === 'opening'}
-            >
+            <button type="button" className="secondary-button" onClick={onCancel}>
               Cancel
             </button>
           )}

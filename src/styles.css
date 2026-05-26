@@ -697,7 +697,16 @@ select {
 }
 
 .upload-modal__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   margin-top: 4px;
+  width: 100%;
+}
+
+.upload-modal__actions .primary-button,
+.upload-modal__actions .secondary-button {
+  width: 100%;
 }
 
 .upload-progress-wrap {

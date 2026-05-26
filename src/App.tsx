@@ -5,6 +5,7 @@ import {
   SlicerUploadAbortError,
   canOpenInPrusaslicer,
   uploadToSlicer,
+  type SlicerUploadResult,
 } from './lib/export/slicerUpload';
 import { computeAssignments } from './lib/materials/assignMaterials';
 import { parseMeshFile } from './lib/mesh/parseMesh';
@@ -20,9 +21,10 @@ interface UploadState {
   target: SlicerTarget;
   fileName: string;
   progress: number;
-  status: 'uploading' | 'opening' | 'error';
+  status: 'uploading' | 'ready' | 'error';
   errorMessage?: string;
   abort: AbortController;
+  result?: SlicerUploadResult;
 }
 
 const SLICER_LABEL: Record<SlicerTarget, string> = {
@@ -435,18 +437,10 @@ export default function App() {
 
       setUpload((current) =>
         current && current.abort === abort
-          ? { ...current, status: 'opening', progress: 1 }
+          ? { ...current, status: 'ready', progress: 1, result }
           : current,
       );
-
-      if (target === 'easyprint') {
-        window.open(result.easyprintUrl, '_blank', 'noopener,noreferrer');
-      } else {
-        window.location.href = result.prusaslicerUrl;
-      }
-
-      setStatus(`Opened ${fileName} in ${label}.`);
-      setUpload(null);
+      setStatus(`Ready to open ${fileName} in ${label}.`);
     } catch (caughtError) {
       if (caughtError instanceof SlicerUploadAbortError) {
         setStatus(`${label} upload cancelled.`);
@@ -467,6 +461,18 @@ export default function App() {
 
   const handlePrintWithEasyPrint = () => startSlicerUpload('easyprint');
   const handlePrintInPrusaSlicer = () => startSlicerUpload('prusaslicer');
+
+  const handleUploadLaunch = () => {
+    if (!upload?.result) return;
+    const { target, result, fileName } = upload;
+    if (target === 'easyprint') {
+      window.open(result.easyprintUrl, '_blank', 'noopener,noreferrer');
+    } else {
+      window.location.href = result.prusaslicerUrl;
+    }
+    setStatus(`Opened ${fileName} in ${SLICER_LABEL[target]}.`);
+    setUpload(null);
+  };
 
   const handleUploadCancel = () => {
     upload?.abort.abort();
@@ -730,6 +736,7 @@ export default function App() {
         progress={upload?.progress ?? 0}
         status={upload?.status ?? 'uploading'}
         errorMessage={upload?.errorMessage}
+        onLaunch={handleUploadLaunch}
         onCancel={handleUploadCancel}
         onClose={handleUploadClose}
       />
