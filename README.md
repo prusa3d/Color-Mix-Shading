@@ -2,9 +2,9 @@
 
 Client-side STL/OBJ color-material preview and 3MF export tool.
 
-**Live demo:** [gzeus.github.io/Color-Mix-Shading](https://gzeus.github.io/Color-Mix-Shading/)
+**Live demo:** [prusa3d.github.io/Color-Mix-Shading](https://prusa3d.github.io/Color-Mix-Shading/)
 
-[![Color Mix Shading preview](./docs/preview.png)](https://gzeus.github.io/Color-Mix-Shading/)
+[![Color Mix Shading preview](./docs/preview.png)](https://prusa3d.github.io/Color-Mix-Shading/)
 
 ## Static Deployment
 
