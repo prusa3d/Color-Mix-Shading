@@ -10,6 +10,7 @@ import {
 import { computeAssignments } from './lib/materials/assignMaterials';
 import { parseMeshFile } from './lib/mesh/parseMesh';
 import { normalize } from './lib/mesh/vector';
+import { ACCEPTED_UPLOAD_EXTENSIONS, isMobile, isAcceptedUploadFile } from './lib/upload';
 import { PreviewViewport } from './components/PreviewViewport';
 import { UploadModal } from './components/UploadModal';
 import { mixFilamentsCached } from './lib/preview/mixCache';
@@ -259,6 +260,13 @@ export default function App() {
       return;
     }
 
+    if (!isAcceptedUploadFile(file.name)) {
+      setOriginalMesh(null);
+      setError('Unsupported file type. Please choose an STL, OBJ, or 3MF file.');
+      setStatus('Import failed.');
+      return;
+    }
+
     setIsProcessing(true);
     setError(null);
     setStatus(`Parsing ${file.name}...`);
@@ -333,6 +341,21 @@ export default function App() {
     // loadFile is stable enough — it reads via isProcessingRef and stable setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load the bundled 3DBenchy sample on demand (Import → "Load 3D Benchy sample").
+  const loadSample = async () => {
+    try {
+      const response = await fetch(`${import.meta.env.BASE_URL}3dbenchy.stl`);
+      if (!response.ok) {
+        throw new Error(`Sample request failed (${response.status}).`);
+      }
+      const blob = await response.blob();
+      await loadFile(new File([blob], '3dbenchy.stl', { type: 'model/stl' }));
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'The sample could not be loaded.');
+      setStatus('Import failed.');
+    }
+  };
 
   const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -493,9 +516,12 @@ export default function App() {
         <section className="panel-section">
           <h2>Import</h2>
           <label className="file-drop">
-            <input type="file" accept=".stl,.obj,.3mf,model/stl,model/3mf,text/plain" onChange={handleFileUpload} disabled={isProcessing} />
+            <input type="file" accept={isMobile ? '' : ACCEPTED_UPLOAD_EXTENSIONS.join(',')} onChange={handleFileUpload} disabled={isProcessing} />
             <span>Choose STL, OBJ, or 3MF - or drop one on the window</span>
           </label>
+          <button type="button" className="secondary-button" onClick={loadSample} disabled={isProcessing}>
+            Load 3D Benchy sample
+          </button>
           <p className={error ? 'status status-error' : 'status'}>{error ?? status}</p>
         </section>
 
