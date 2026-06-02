@@ -90,7 +90,7 @@ async function createModelXml(mesh: ParsedMesh, assignments: Uint8Array, materia
 <model unit="millimeter" xml:lang="en-US" xmlns="${CORE_NAMESPACE}" xmlns:slic3rpe="${PRUSA_NAMESPACE}">
   <metadata name="slic3rpe:Version3mf">1</metadata>
   <metadata name="slic3rpe:MmPaintingVersion">1</metadata>
-  <metadata name="Application">Color Mix Shading</metadata>
+  <metadata name="Application">ColorMix Shading</metadata>
   <resources>
     <basematerials id="1">${materialsXml}</basematerials>
     <object id="2" type="model" name="${escapeXml(mesh.name)}">
