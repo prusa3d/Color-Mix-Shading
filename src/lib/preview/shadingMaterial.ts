@@ -9,11 +9,13 @@ const AXIS_INDEX: Record<Axis, number> = { x: 0, y: 1, z: 2 };
 
 const VERTEX_SHADER = /* glsl */ `
 varying vec3 vWorldNormal;
-varying vec3 vWorldPos;
+varying vec3 vFaceCentroid;
+
+attribute vec3 aFaceCentroid;
 
 void main() {
   vec4 worldPos = modelMatrix * vec4(position, 1.0);
-  vWorldPos = worldPos.xyz;
+  vFaceCentroid = (modelMatrix * vec4(aFaceCentroid, 1.0)).xyz;
   vWorldNormal = mat3(modelMatrix) * normal;
   gl_Position = projectionMatrix * viewMatrix * worldPos;
 }
@@ -23,7 +25,7 @@ const FRAGMENT_SHADER = /* glsl */ `
 precision highp float;
 
 varying vec3 vWorldNormal;
-varying vec3 vWorldPos;
+varying vec3 vFaceCentroid;
 
 uniform vec3 uLightDir;
 uniform vec3 uPalette[${MAX_PALETTE}];
@@ -56,7 +58,7 @@ void main() {
     value = max(0.0, dot(N, normalize(uLightDir)));
   } else {
     float span = max(uHeightMax - uHeightMin, 1e-6);
-    value = clamp((axisComponent(vWorldPos, uHeightAxis) - uHeightMin) / span, 0.0, 1.0);
+    value = clamp((axisComponent(vFaceCentroid, uHeightAxis) - uHeightMin) / span, 0.0, 1.0);
   }
 
   float fmc = float(uMaterialCount);

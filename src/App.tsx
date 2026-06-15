@@ -39,6 +39,9 @@ const DEFAULT_SECOND_LIGHT: Vec3 = [-0.55, -0.35, 0.75];
 const DEFAULT_SECOND_LIGHT_COLOR = '#3B82F6';
 const DEFAULT_HIGHLIGHT = '#F8D36B';
 const DEFAULT_SHADOW = '#6C2A00';
+// Fallback delay before the UI releases itself if the preview never reports
+// that it has finished its first paint.
+const PREVIEW_READY_TIMEOUT_MS = 15000;
 const LIGHT_PRESETS: Array<{ name: string; direction: Vec3 }> = [
   { name: 'Front Left', direction: [-1, -1, 1] },
   { name: 'Front Right', direction: [1, -1, 1] },
@@ -254,6 +257,14 @@ export default function App() {
   const isProcessingRef = useRef(isProcessing);
   isProcessingRef.current = isProcessing;
   const dragCounter = useRef(0);
+  const previewWatchdog = useRef<number | null>(null);
+  const clearPreviewWatchdog = useCallback(() => {
+    if (previewWatchdog.current !== null) {
+      window.clearTimeout(previewWatchdog.current);
+      previewWatchdog.current = null;
+    }
+  }, []);
+  useEffect(() => clearPreviewWatchdog, [clearPreviewWatchdog]);
 
   const loadFile = async (file: File) => {
     if (isProcessingRef.current) {
@@ -278,6 +289,14 @@ export default function App() {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
       setOriginalMesh(parsedMesh);
       // isProcessing stays true until ShadedMesh signals via handleMeshLoaded.
+      // Safety net: if that signal never arrives (lost WebGL context, starved
+      // animation frames), release the UI instead of leaving the spinner up.
+      clearPreviewWatchdog();
+      previewWatchdog.current = window.setTimeout(() => {
+        previewWatchdog.current = null;
+        setStatus(`Ready - ${parsedMesh.faceCount.toLocaleString()} faces`);
+        setIsProcessing(false);
+      }, PREVIEW_READY_TIMEOUT_MS);
     } catch (caughtError) {
       setOriginalMesh(null);
       setError(caughtError instanceof Error ? caughtError.message : 'The mesh could not be parsed.');
@@ -287,9 +306,10 @@ export default function App() {
   };
 
   const handleMeshLoaded = useCallback((mesh: ParsedMesh) => {
+    clearPreviewWatchdog();
     setStatus(`Ready - ${mesh.faceCount.toLocaleString()} faces`);
     setIsProcessing(false);
-  }, []);
+  }, [clearPreviewWatchdog]);
 
   useEffect(() => {
     const handleDragEnter = (event: DragEvent) => {

@@ -6,6 +6,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import type { AssignmentMode, Axis, PaletteMaterial, ParsedMesh, Vec3 } from '../types/mesh';
 import { createSurfaceGeometry } from '../lib/preview/createPreviewGeometry';
 import { createShadingMaterial, updateShadingUniforms } from '../lib/preview/shadingMaterial';
+import { getMeshCentroidRange } from '../lib/geometry/analyzeMesh';
 
 type SecondLight = { direction: Vec3; color: string } | null;
 
@@ -322,16 +323,14 @@ export function PreviewViewport({
   const orbitControls = useRef<OrbitControlsImpl | null>(null);
   const bounds = useMemo(() => computeMeshBounds(mesh), [mesh]);
   const heightRange = useMemo(() => {
-    if (!bounds) {
+    if (!mesh) {
       return { min: 0, max: 1 };
     }
-    const axisIndex = AXIS_INDEX[axis];
-    const half = bounds.size.getComponent(axisIndex) / 2;
-    const center = bounds.center.getComponent(axisIndex);
-    const min = center - half;
-    const max = center + half;
-    return min === max ? { min, max: min + 1 } : { min, max };
-  }, [axis, bounds]);
+    // Match the exporter, which normalizes height over the triangle-centroid
+    // range rather than the vertex bounding box.
+    const [min, max] = getMeshCentroidRange(mesh, AXIS_INDEX[axis]);
+    return { min, max };
+  }, [axis, mesh]);
   const secondLightKey = secondLight ? `${secondLight.color}-${secondLight.direction.join(',')}` : 'off';
   const renderVersion = `${cameraView}-${mesh?.faceCount ?? 0}-${palette.map((item) => item.color).join('|')}-${lightDirection.join(',')}-${mode}-${axis}-${secondLightKey}`;
 

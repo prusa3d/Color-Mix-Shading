@@ -26,16 +26,32 @@ function normalizeHexColor(color: string): string {
 }
 
 function encodePrusaTriangleState(state: number): string {
+  // Matches PrusaSlicer's TriangleSelector painting format: two split-side bits
+  // (0 for an unpainted leaf) followed by the facet state. States 0-2 take two
+  // bits; 3-16 use the 0b11 escape plus four bits of (state - 3); 17 and above
+  // use the 0b1110 escape plus eight bits of (state - 17). The previous encoder
+  // stopped at the first escape, so states above 16 overflowed the 4-bit field
+  // and silently painted the wrong extruder.
   const bitstream: boolean[] = [false, false];
 
-  if (state >= 3) {
+  if (state < 3) {
+    bitstream.push(Boolean(state & 1), Boolean(state & 2));
+  } else if (state <= 16) {
     bitstream.push(true, true);
-    const extendedState = state - 3;
+    const encoded = state - 3;
     for (let bitIndex = 0; bitIndex < 4; bitIndex += 1) {
-      bitstream.push(Boolean(extendedState & (1 << bitIndex)));
+      bitstream.push(Boolean(encoded & (1 << bitIndex)));
     }
   } else {
-    bitstream.push(Boolean(state & 1), Boolean(state & 2));
+    const encoded = state - 17;
+    if (encoded > 255) {
+      throw new Error(`Triangle state ${state} exceeds the encodable range (max 272).`);
+    }
+    bitstream.push(true, true);
+    bitstream.push(false, true, true, true);
+    for (let bitIndex = 0; bitIndex < 8; bitIndex += 1) {
+      bitstream.push(Boolean(encoded & (1 << bitIndex)));
+    }
   }
 
   let output = '';
